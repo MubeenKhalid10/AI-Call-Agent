@@ -658,6 +658,79 @@ later phase can map it onto a HubSpot call engagement, a Pipedrive activity or
 a Salesforce task without changing what is stored; the mapping is sketched in
 `src/campaigns/results.py`.
 
+## Safe to point at real numbers (Phase 9)
+
+Phase 9 is about what happens when something breaks. Run the health check
+before a calling session, and the recovery pass after anything unclean:
+
+```bash
+uv run health.py                 # every dependency, without placing a call
+uv run campaign.py recover       # resolve attempts left live by a crash
+```
+
+### Never two calls to the same person
+
+The requirement that shapes the rest. Five independent mechanisms, any one of
+which would usually be enough:
+
+1. The queue picks and reserves in one transaction, `FOR UPDATE SKIP LOCKED`.
+2. Every reservation carries an **idempotency key** derived from what the call
+   is — campaign, membership, attempt number — under a unique index. Two
+   callers who mean the same call resolve to one row, lock or no lock.
+3. **Placing a call is never retried.** Neither Twilio nor SignalWire offers an
+   idempotency key for call creation, so a retry is a second phone call.
+4. A placement that times out or loses its connection is **ambiguous**, not
+   failed. The attempt is held as `UNRESOLVED`, which is a *live* status, so
+   the prospect cannot be dialled again.
+5. `campaign.py recover` asks the carrier which calls actually exist and writes
+   the answer. **It never dials to find out.** An attempt it cannot resolve is
+   closed as failed, so the prospect stops being blocked and the campaign's own
+   retry policy decides about trying again.
+
+Not knowing costs one uncalled prospect. Guessing costs a stranger's phone
+ringing twice. Every branch above errs the first way.
+
+### Retries, and where they are not allowed
+
+| Operation | Policy |
+|---|---|
+| Reading from a carrier, a vendor, the database | 3 attempts, exponential backoff, jitter, per-attempt timeout |
+| Placing a call | **one attempt.** An ambiguous answer is held, never repeated |
+| A write whose outcome is unknown | never retried; the caller has to handle not knowing |
+
+A failure is classified before it is retried: `RETRY` (it certainly did not
+happen), `FATAL` (it was refused on its merits), or `AMBIGUOUS` (unknown). Only
+the first is tried again.
+
+### Campaign safety
+
+Calling hours are enforced by default — 09:00–18:00, Monday to Friday, in the
+prospect's timezone where their record supplies one and `CALLING_TIMEZONE`
+otherwise. A closed window refuses *before* a reservation is taken, so it never
+spends one of a prospect's attempts. Alongside it: a concurrency limit
+(one call at a time by default), optional pacing, the existing attempt cap and
+do-not-call enforcement, and a hard ceiling on how long one call may last.
+
+### When something breaks mid-call
+
+The bot supervises itself. Consecutive failures from one pipeline stage end the
+call deliberately — with a goodbye if the agent can still speak — instead of
+leaving the caller listening to silence. An inference that starts and never
+finishes is caught the same way, and the LLM's own HTTP timeout is set below
+that threshold so the request is abandoned first.
+
+One failure is enough if the agent has not spoken yet: a call whose greeting
+never happens has nothing to recover to, and nothing else would trigger another
+attempt. That case was found by running a call during a real provider outage,
+where it had left the caller in silence for 57 seconds.
+
+### Logs you can follow
+
+Every log line carries the call's ids — campaign, prospect, attempt, carrier
+call id, provider. `LOG_FORMAT=json` emits them as fields. Every configured
+credential's value is replaced with `***` in every record, including exception
+text.
+
 ### What it will not do
 
 The honesty rules are in the system prompt and asserted by
@@ -816,19 +889,25 @@ SESSION_IDLE_TIMEOUT_SECS=3600 uv run python -m pipecat.evals suite evals/suite.
 See [`server/evals/README.md`](server/evals/README.md) for why both of those
 details are load-bearing.
 
-Alongside them are eight deterministic check scripts that need no vendors, no
+Alongside them are nine deterministic check scripts that need no vendors, no
 database and no phone, and run in seconds:
 
 ```bash
 uv run python tests/test_conversation.py  # the sales layer: states, record, detectors, transcript, all 14 scenarios
 uv run python tests/test_results.py       # Phase 8: the call result — dispositions, validation, summary, transcript
+uv run python tests/test_reliability.py   # Phase 9: injected failures — duplicate calls, restarts, retries, guardrails
 uv run python tests/test_actions.py       # the Phase 7 tools against a stubbed calendar, store, carrier
 uv run python tests/test_scheduling.py    # the local calendar's arithmetic; Cal.com against a stub HTTP session
 uv run python tests/test_knowledge.py     # retrieval, chunking, what the LLM is handed
 uv run python tests/test_telephony.py     # call placement, transfer, outcomes, config, bot wiring
 uv run python tests/test_realtime.py      # echo suppression, the peer watchdog
-uv run python tests/test_campaigns.py     # phone numbers, CSV import, the queue, DNC, callbacks, meetings, results
+uv run python tests/test_campaigns.py     # phone numbers, CSV import, the queue, DNC, callbacks, meetings, results, duplicate protection
 ```
+
+`test_reliability.py` is the one that injects failures rather than avoiding
+them: a carrier that times out, a database that has gone away, an LLM that
+starts a response and never finishes it, a webhook delivered twice, a process
+that dies between reserving a call and placing it.
 
 No test books a real meeting or transfers a real call: the calendar and the
 carrier are stubs that can be told to succeed, refuse or fail, which is how the
@@ -866,6 +945,7 @@ stack. Neither can prove the audio on a real phone call — that needs a phone.
 server/
 ├── bot.py              # Wiring only: transport, pipeline, event handlers
 ├── call.py             # Place one outbound phone call and watch it
+├── health.py           # Check every dependency, without placing a call (Phase 9)
 ├── campaign.py         # Prospects, campaigns and the call queue
 ├── ingest.py           # Load documents into the knowledge base
 ├── src/
@@ -888,6 +968,13 @@ server/
 │   │   └── conversation.py / director.py / sources.py / sink.py
 │   ├── actions/        # The backend behind the tools: validation, authorisation, I/O
 │   ├── scheduling/     # Calendar providers: business-hours local calendar, Cal.com
+│   ├── reliability/    # Phase 9: retries, idempotency, guardrails, health, structured logs
+│   │   ├── retry.py       # May this be tried again? RETRY / FATAL / AMBIGUOUS
+│   │   ├── idempotency.py # What makes two requests the same call
+│   │   ├── guardrails.py  # Calling hours, pacing, concurrency, call duration
+│   │   ├── supervisor.py  # What the bot does when a service fails mid-call
+│   │   ├── health.py      # Every dependency, probed cheaply
+│   │   └── observability.py # Call ids on every line; credentials scrubbed
 │   ├── campaigns/
 │   │   ├── models.py     # Prospect, Campaign, CampaignProspect, CallAttempt, ScheduledCallback, Meeting
 │   │   ├── results.py    # CallResult: the validated, CRM-ready reading of a finished call (Phase 8)
@@ -896,7 +983,8 @@ server/
 │   │   ├── store.py      # The seven tables, and the queue's transaction
 │   │   ├── service.py    # The rules: who may be called, what an outcome means
 │   │   ├── briefing.py   # The one place campaigns meet the conversation
-│   │   └── dialer.py     # The one place campaigns meet the telephony provider
+│   │   ├── dialer.py     # The one place campaigns meet the telephony provider
+│   │   └── recovery.py   # What a restart does about calls that were in flight
 │   └── telephony/
 │       ├── base.py       # TelephonyProvider, call outcomes, TwiML, stream URLs
 │       ├── twilio.py     # The only file that knows Twilio exists

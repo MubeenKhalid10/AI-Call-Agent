@@ -2,10 +2,11 @@
 
 **Written for whoever picks this up next, including a fresh Claude session with no memory of how it got here.** Read this before touching code. The section that will save you the most time is [Attempted Approaches That Failed](#attempted-approaches-that-failed) — several of the things below look obviously right and are not.
 
-- **Status:** Phase 8 complete. Phase 9 not specified — see [Next recommended steps](#12-next-recommended-steps) for what Phase 8 leaves it.
-- **Last verified:** 2026-09-04 (Phase 8). All **eight** deterministic check scripts pass (the seven from before plus `test_results.py`), and a simulated campaign call was driven through the real bot and produced a stored `call_results` row — see [Testing completed](#10-testing-completed). The Phase 7 Groq finding still stands and still gates live use: this organisation's free tier allows 8,000 input tokens a minute and a turn with twelve tools advertised costs about 3,100, so the model is throttled for tens of seconds after every tool call. The code is correct; the tier is not usable for live calls with this many tools. Read [Known issues](#5-known-issues-and-limitations) before believing a timeout.
-- **Phase 8 also fixed a Phase 6 bug worth knowing about:** the attempt status for a callback, a no, or a do-not-call was only written when the call ended *without* the agent's goodbye, because `end_call` moves the state to `ENDING` and the sink read only the final state. It now reads the state path. See [Failed §23](#23-reading-the-attempt-status-from-the-final-state-phase-6-found-in-phase-8).
-- **Stack:** Pipecat 1.8.1, Python 3.12, Deepgram Flux + Groq + Cartesia, SmallWebRTC + Twilio/SignalWire, PostgreSQL (pgvector for the knowledge base, plain tables for campaigns, callbacks and meetings), phonenumbers, tzdata. Optional Cal.com for the calendar.
+- **Status:** Phase 9 complete. Phase 10 not specified — see [Next recommended steps](#12-next-recommended-steps).
+- **Last verified:** 2026-09-04 (Phase 9). All **nine** deterministic check scripts pass (the eight from before plus `test_reliability.py`), `uv run health.py` reports all seven components OK against the real vendors, and the ambiguous-placement → hold → recover loop was driven end to end against the **live SignalWire API** — see [Testing completed](#10-testing-completed). The Phase 7 Groq finding still stands and still gates live use: 8,000 input tokens a minute, 200,000 a day, and a turn with twelve tools costs ~3,100. Read [Known issues](#5-known-issues-and-limitations) before believing a timeout.
+- **Two bugs were found by running Phase 9's own code against a real outage**, both now fixed and both worth knowing about: an LLM failure could never accumulate towards its threshold, and a call whose *greeting* failed sat silent until the idle timeout. See [Failed §25](#25-counting-an-llm-failure-and-then-immediately-forgetting-it-phase-9) and [§26](#26-a-threshold-that-cannot-be-reached-because-nothing-tries-again-phase-9).
+- **Phase 8 fixed a Phase 6 bug worth knowing about:** the attempt status for a callback, a no, or a do-not-call was only written when the call ended *without* the agent's goodbye. It now reads the state path. See [Failed §23](#23-reading-the-attempt-status-from-the-final-state-phase-6-found-in-phase-8).
+- **Stack:** Pipecat 1.8.1, Python 3.12, Deepgram Flux + Groq + Cartesia, SmallWebRTC + Twilio/SignalWire, PostgreSQL (pgvector for the knowledge base, plain tables for campaigns, callbacks, meetings and call results), phonenumbers, tzdata. Optional Cal.com for the calendar. No broker, no lock service, no scheduler daemon — Phase 9's correctness is a transaction and two unique indexes.
 
 > **This file was stale between Phase 2 and Phase 4.** Phase 3 shipped without it
 > being updated, so the Phase 3 notes below were reconstructed from the code on
@@ -33,14 +34,15 @@ As of Phase 7 the agent does all of that, including booking the meeting: it phon
 | 5 | Prospects, campaigns, CSV import, the call queue, do-not-call, call history | Done (2026-09-03) |
 | 6 | The sales conversation: state machine, prospect context, objections, DNC, structured qualification | Done (2026-09-03) |
 | 7 | Actions: calendar lookup and booking, scheduled callbacks, DNC, end call, live transfer, knowledge search — strict tool schemas, a validating backend, honest results | Done (2026-09-04) |
-| 8 | The post-call result: one validated `CallResult` per finished attempt, dispositions, the transcript kept verbatim, a deterministic summary, a CRM-ready shape (no integration yet) | **Done (2026-09-04)** |
-| 9 | Not yet specified by the user — see [Next recommended steps](#12-next-recommended-steps) | Not started |
+| 8 | The post-call result: one validated `CallResult` per finished attempt, dispositions, the transcript kept verbatim, a deterministic summary, a CRM-ready shape (no integration yet) | Done (2026-09-04) |
+| 9 | Safety and reliability: duplicate-call protection, idempotency, recovery after a restart, bounded retries, campaign guardrails, health checks, structured logs, failure-injection tests | **Done (2026-09-04)** |
+| 10 | Not yet specified by the user — see [Next recommended steps](#12-next-recommended-steps) | Not started |
 
 ---
 
 ## 2. Current implementation status
 
-A working, measured, tested realtime **cold-calling sales agent** that knows who it is phoning, answers from your documents, and that you can reach in a browser **or on a phone**.
+A working, measured, tested realtime **cold-calling sales agent** that knows who it is phoning, answers from your documents, records what every call produced, and that you can reach in a browser **or on a phone** — with the failure handling that makes pointing it at real numbers defensible.
 
 ```
 caller -> Deepgram Flux -> retrieval -> call guidance -> Groq -> Cartesia -> caller
@@ -87,8 +89,10 @@ uv run call.py +923001234567
 
 ```bash
 cd server
+uv run health.py                           # Phase 9 — is every dependency actually up?
 uv run python tests/test_conversation.py   # 291 checks — the sales layer. Run this first
 uv run python tests/test_results.py        # 258 checks — Phase 8: the call result, no database
+uv run python tests/test_reliability.py    # 150+ checks — Phase 9: injected failures
 uv run python tests/test_knowledge.py
 uv run python tests/test_telephony.py
 uv run python tests/test_realtime.py
@@ -228,7 +232,93 @@ speakable output — with turns that belong in the call it is actually on, and
 what happens when a prospect genuinely goes off-topic is
 `sales/unrelated_question.yaml`.
 
-### Phase 8 (this session)
+### Phase 9 (this session)
+
+**The requirement that shaped everything: never two calls to one person.** Five
+independent mechanisms, listed in `src/reliability/__init__.py` and each driven
+on its own by a check in `tests/test_reliability.py`:
+
+1. `reserve_next_call` picks and reserves in one transaction with
+   `FOR UPDATE SKIP LOCKED` (Phase 5, unchanged).
+2. **`call_attempts.idempotency_key`**, unique, derived — `v1:campaign:3:
+   membership:12:attempt:2`. Derived rather than random because a random key
+   protects one client retrying; a derived one makes two *different* callers
+   who mean the same call compute the same string. A collision inside the
+   reservation transaction rolls the whole thing back (so the attempt count is
+   not spent either) and reports an empty queue.
+3. **`place_call` is never retried.** Its policy is `NEVER_RETRY` — one
+   attempt, with a timeout. Neither Twilio nor SignalWire offers an idempotency
+   key for call creation, so there is no safe repeat.
+4. **`CallAttemptStatus.UNRESOLVED`**, new, for network ambiguity — a placement
+   that timed out or lost its connection. It is deliberately **live**, so the
+   prospect stays blocked. Not knowing costs one uncalled prospect; the other
+   direction costs a stranger's phone ringing twice.
+5. **`campaigns/recovery.py`** resolves it by asking the carrier which calls
+   exist (`find_recent_calls`), never by dialling. What it cannot resolve it
+   closes as failed with the reason on the row, so the prospect is freed and the
+   campaign's own retry policy — not recovery — decides about trying again.
+
+**A failure is classified before anything is retried.** `reliability/retry.py`
+has three verdicts, and the third is the point: `RETRY` (it certainly did not
+happen), `FATAL` (it was refused on its merits), `AMBIGUOUS` (unknown).
+`AMBIGUOUS` raises `AmbiguousOutcomeError` immediately, whatever attempts
+remain, so a caller cannot mistake "it failed" for "it did not happen". Backoff
+is exponential with a cap and equal jitter; every policy carries a per-attempt
+timeout, because an operation that can hang is not retryable in any useful
+sense. An exception can opt into being retryable by setting `retryable = True`
+on its class — which is how `ProviderUnavailableError` says a carrier blip is
+worth another go without `retry.py` knowing what a carrier is.
+
+**Status updates are monotonic, so a duplicate event is a no-op.**
+`models.may_advance` plus `store.apply_call_event` (which selects `FOR UPDATE`)
+mean a webhook delivered twice, a poll racing it, or an out-of-order delivery
+all land on the same row without any of them undoing another. A final status is
+never overwritten — which *generalises* the three special-cased lines in
+`dialer.refresh` that stopped the carrier's "completed" flattening a
+do-not-call. Those lines are gone; the rule is now a property of the write.
+
+**Campaign safety, with the safe end of every trade as the default.**
+`reliability/guardrails.py`: calling hours (09:00–18:00 mon-fri, enforced),
+concurrency (one live call), pacing (off), and a call-duration ceiling (ten
+minutes). Hours are applied in the *prospect's* timezone when their imported
+record supplies one, and never inferred from their phone number — a country
+code does not determine a timezone. Guardrails are checked **before** a
+reservation is taken, so a closed window does not spend one of a prospect's
+attempts.
+
+**The bot supervises itself.** `reliability/supervisor.py` counts *consecutive*
+failures per pipeline stage, resets on a success from that stage, and ends the
+call deliberately — with a goodbye where the agent can still speak — rather
+than leaving the caller in silence. It also catches an inference that starts
+and never finishes, which no error path can see because nothing raises, and
+enforces the duration ceiling. `services.py` additionally sets the LLM client's
+own HTTP timeout to 80% of the stall threshold, through the OpenAI SDK's public
+`with_options`, because Pipecat's `create_client` swallows kwargs and the SDK's
+default wait is ten minutes.
+
+**Health checks that cost nothing and ring nobody.** `uv run health.py` probes
+the database, knowledge base, STT, LLM, TTS and carrier with the cheapest
+authenticated read each one offers. The LLM check also verifies the configured
+model is still in the provider's catalogue — the Groq-catalogue-churn failure
+this project has already met, which otherwise surfaces as a bot that answers
+the phone and says nothing.
+
+**Structured logs, credentials scrubbed.** `reliability/observability.py`:
+`call_context` binds campaign, prospect, attempt, call and provider onto every
+record inside a block, `LOG_FORMAT=json` emits them as fields, and a loguru
+patcher replaces every configured credential's *value* with `***` in every
+record including exception text. The scrubber is a backstop against a vendor
+SDK putting an Authorization header in an exception message — something no
+care at the call site prevents.
+
+**No distributed infrastructure.** No broker, no lock service, no daemon.
+Correctness lives in PostgreSQL: a transaction, two unique indexes and a status
+that blocks. Pacing and the concurrency limiter are in-process and documented
+as such — they are about *rate*, and a second dialer could not cause a
+duplicate call because none of the five mechanisms depends on being the only
+process running.
+
+### Phase 8 (previous session)
 
 **One row per finished attempt, from either of two writers, and the row is a
 projection.** `call_results` (`src/campaigns/results.py`, `store.py`) holds
@@ -458,10 +548,15 @@ will call `CampaignService`, not this file.
 
 ## 4. Pending tasks
 
-Nothing is half-finished. Phase 8 is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
+Nothing is half-finished. Phase 9 is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
 
-- **Phase 9 scope** — the user has not specified it yet. Do not guess and start building. (The Phase 8 session was told "continue your task for phase 9" mid-way; it was read as a slip and Phase 8 was finished, since no Phase 9 exists anywhere.)
-- **Results for attempts that finished before 2026-09-04 need `uv run campaign.py rebuild-results`** — once, after `campaign.py init`. Done on this machine's database (attempt 1, the SignalWire refusal, now has a `FAILED` result). New attempts get theirs automatically.
+- **Phase 10 scope** — the user has not specified it yet. Do not guess and start building.
+- **An existing database needs `uv run campaign.py init` again** for the Phase 9 columns (`idempotency_key`, `placement_started_at`) and the rebuilt live-attempts index. Idempotent; done on this machine. Attempts written before it have no idempotency key, which is safe — the reservation lock still protects them — and every new attempt gets one.
+- **There is still no webhook endpoint.** Carrier status is polled. `apply_call_event` is written to be the entry point for a webhook when one arrives — it is idempotent and takes a carrier call id — but nothing serves one, so "duplicate webhook" is covered by the check scripts and not by a live delivery.
+- **The concurrency limit and pacing are in-process.** With `MAX_CONCURRENT_CALLS=1` and one dialer they are exact. Two dialers would each allow their own limit; they could not cause a *duplicate call* (that is protected in the database) but they could exceed the intended rate. A shared limit needs either a database counter or the scheduler that Phase 9 deliberately did not build.
+- **`campaign.py call --count N` is not a scheduler.** It places N calls with pacing between them and stops on an ambiguous placement. Nothing runs unattended, so a scheduled callback still only happens when somebody runs the command.
+- **Results for attempts that finished before 2026-09-04 need `uv run campaign.py rebuild-results`** — once, after `campaign.py init`. Done on this machine's database. New attempts get theirs automatically.
+- **Phase 9's drills left rows in the database.** A campaign `Phase 9 drill` (id 2) with one prospect `Drill Subject` (+923009999001, id 4) and attempts 4 and 5, both closed. Kept as a worked example of the ambiguous-placement path; `DELETE FROM campaigns WHERE name = 'Phase 9 drill'; DELETE FROM prospects WHERE phone_normalized = '+923009999001';` removes them. Prospect `Sara Ali` is now `EXHAUSTED` in `Q1 Outreach` after a real SignalWire refusal (21219, an unverified number).
 - **The Phase 8 manual test left one row in the database.** Attempt 2 for prospect 1 (`telephony_call_id` `CAmanual-phase8`, provider `fake`), created by hand so a simulated call could land a result on it; its result is the greeting-only `COMPLETED` row. The attempt was then set to `COMPLETED` by hand (a fake provider has no carrier to reconcile from, and a `QUEUED` attempt counts as live and would have blocked prospect 1 in the queue), which also exercised the precedence rule on the real row: `record_carrier_result` logged "the conversation's result stands" and returned None. Harmless and a worked example; `DELETE FROM call_attempts WHERE telephony_call_id = 'CAmanual-phase8';` removes it and its result.
 - **The transcript's timestamps are when a turn was *recorded*.** For the agent that is after playout, so the greeting on a phone call shows `at` ≈ 15 s. Honest, and documented in `transcript.py`; a start time would need a different event.
 - **The Groq tier.** The code runs; the free tier throttles it — see [Known issues](#5-known-issues-and-limitations). Somebody has to decide: pay Groq, switch `LLM_PROVIDER`, or cut the tool count. That decision gates any live use of Phase 7.
@@ -603,6 +698,12 @@ Phase 6 answered the product question that kept those two open: the agent is a s
 | `questions` is a heuristic | A question phrased as a statement is missed; "do it by hand" opens with an interrogative and may be kept | Phase 8. Verbatim and beside the transcript, so a reader can see. `extract_questions` is one function to tune |
 | A result's duration is the bot's view on a phone call | A second or two shorter than the carrier bills; `call_attempts.duration_seconds` takes the carrier's on reconciliation | Phase 8. `source` on the row says who wrote it; both numbers are kept, on their own rows |
 | Results are not backfilled automatically | An attempt that finished before `campaign.py init` added the table has no row | `uv run campaign.py rebuild-results`, once. Done on this machine |
+| An ambiguous placement blocks its prospect until recovery runs | One prospect uncalled, for as long as nobody runs `campaign.py recover` | Phase 9, deliberate and the safe direction. `campaign.py call` runs recovery first; `health.py` flags live attempts as degraded |
+| Recovery cannot resolve an attempt if the carrier cannot list calls | The attempt is closed as failed and the reason says to check the carrier's log by hand | Both supported carriers *can* list calls, and it was exercised live against SignalWire. A future carrier without the endpoint gets the honest dead end rather than a guess |
+| Concurrency and pacing are in-process | Two dialers would each allow their own limit | Cannot cause a duplicate call — that is protected in the database. It is a rate limit, not a correctness one |
+| No webhook endpoint exists | Carrier status is still polled, so an outcome is up to `--poll` seconds late | `store.apply_call_event` is the idempotent entry point a webhook would use; nothing serves one yet |
+| The calling window uses the prospect's timezone only if their record supplies one | A list imported without a `timezone` column is called in `CALLING_TIMEZONE` | Deliberate: a country code does not determine a timezone, and guessing puts the call at the wrong hour invisibly |
+| A supervised ending writes a note, not a distinct status | A call cut off by the duration ceiling reads as `COMPLETED` with a note | The note is on the call result and the reason is in the log. A distinct disposition would need a Phase 8 vocabulary change |
 | Retrieval gating is a heuristic | A product question phrased with no interrogative and no commercial noun is not searched | Written to skip rather than allow, so the failure needs all three signals absent. `KB_RETRIEVAL_MODE=always` restores Phase 3 |
 | The conversation opens a second database pool per session | Two more connections per call, closed at session end | One bot per call, so it is bounded. A long-lived multi-session host would want a shared pool |
 | A prospect's outcome is reconciled by polling, not pushed | An attempt can sit in `QUEUED` until something calls `dialer.refresh` | Carrier webhooks are the upgrade; `call_attempts.telephony_call_id` is unique so a callback can find the row |
@@ -774,6 +875,100 @@ when this becomes a scheduler — the attempt row is already keyed by
 stream parameters, using the mechanism Phase 4 built. Phase 6 reads them, in
 `conversation/sources.py`, without the campaign tables becoming reachable from
 `bot.py`.
+
+### Phase 9
+
+**Ambiguity is a first-class outcome, not a kind of failure.** Every retry
+helper collapses "timed out" into "failed", because from the caller's side they
+look identical. For `place_call` they are not: a failure means no phone rang and
+an ambiguity means one might be ringing now. `Verdict.AMBIGUOUS` and
+`AmbiguousOutcomeError` exist so the distinction cannot be lost by accident —
+the wrapper type means a caller that treats it as a plain failure has to do so
+deliberately.
+
+**An ambiguous attempt stays live rather than being released.** The instinct is
+to free the prospect so the campaign can carry on. That is the wrong direction:
+a live attempt costs one uncalled person, and releasing one costs a second call
+to somebody whose phone may already be ringing. `UNRESOLVED` is in the live set
+for that reason, which also means it counts against the concurrency limit and
+appears in `health.py` as degraded — both of which are how somebody finds out
+they need to run `recover`.
+
+**The idempotency key is derived, not generated.** A random key handed out by a
+client protects that client's own retry. It does nothing about two *different*
+callers deciding to do the same thing — a worker and a restarted worker, say.
+Deriving the key from what the call is (campaign, membership, attempt number)
+means they compute the same string without having communicated. It is also
+readable, so a duplicate in a log says which call it was a duplicate of.
+
+**The attempt row is the idempotency record.** No separate table and no lease
+with an expiry. The row already exists, already carries the unique carrier call
+id, and its own live status *is* the lease — which `recovery.py` breaks when the
+holder is gone. A lease with a timeout would need a clock the database and every
+worker agreed on.
+
+**Recovery never dials, and an unresolvable attempt is closed rather than
+retried.** Recovery's job is to find out what happened, not to make something
+happen. Deciding to try somebody again is the campaign's retry policy, which has
+the attempt count and the retry window; a recovery pass that redialled would
+bypass both.
+
+**Monotonic status transitions instead of a special case per writer.** Phase 6
+stopped `dialer.refresh` flattening a do-not-call into `COMPLETED` with three
+lines in `refresh`. That worked for `refresh` and for nothing else. Making it a
+property of the write — `may_advance`, applied inside a `FOR UPDATE` — covers
+every writer that will ever exist, including a webhook nobody has written yet.
+Those three lines are gone.
+
+**Guardrails are checked before reserving, not after.** Reserving and then
+releasing works, but it spends one of the membership's three attempts, and "the
+calling window was closed" must not cost a prospect a try.
+
+**Calling hours use the prospect's timezone only when their record supplies
+one.** Deriving it from the phone number would be right most of the time and
+silently wrong for every country with more than one zone. The importer already
+keeps unrecognised CSV columns, so a list *can* carry a timezone; nothing
+guesses one.
+
+**Consecutive failures, not total.** Three failures across a twenty-minute call
+are three blips; three in a row are an outage. A success from the same stage
+resets the count — which is exactly the subtlety that produced Failed §25.
+
+**The supervisor ends the session rather than hanging the call up.** Ending
+through `stop_when_done` means the ordinary teardown runs, so the conversation
+record and the call result are written exactly as for any other ending. A
+supervised ending is a *recorded* ending, which is the difference between an
+attempt that reads `FAILED` with a reason and one that stays live and has to be
+recovered.
+
+**The LLM's HTTP timeout is set below the supervisor's stall threshold.** Two
+layers, deliberately: the network layer abandons the request first, so the
+supervisor's much blunter response — ending the call — is only reached when
+that did not work. It is applied through the OpenAI SDK's public
+`with_options`, guarded, because Pipecat's `create_client` does not pass kwargs
+to the client (verified in the installed source) and the SDK's default wait is
+ten minutes.
+
+**Health checks read; they never exercise.** Listing models, listing voices,
+reading the account. A check that placed a call would cost money and ring a
+phone, and one that ran an inference would cost tokens on a tier that is already
+the bottleneck. What it therefore *cannot* prove — that a call would sound right
+— is the eval suite's job, and the docstring says so.
+
+**Checking the model against the provider's catalogue.** One extra request, and
+it catches the Groq-catalogue-churn failure this project has already met, which
+otherwise appears as a bot that answers the phone and says nothing.
+
+**Secrets are scrubbed by a patcher, not by care at the call site.** This
+project already logs key tails rather than keys. The failure being guarded
+against is a vendor SDK putting an Authorization header into an exception
+message, which no amount of discipline at the call site prevents.
+
+**`src/reliability/` imports nothing from `src/campaigns/`.** Keeping it a
+strictly lower layer is what stops the two becoming circular, and it is why
+recovery lives in `campaigns/` — the same rule `dialer.py` and `briefing.py`
+already follow: a module that joins two worlds belongs on the side that owns the
+rows.
 
 ### Phase 8
 
@@ -1028,7 +1223,20 @@ Verify these before relying on them; each was true on 2026-09-02 on this machine
 4. **English only.** `flux-general-en`, Kokoro `af_heart`, Moonshine `en`. Multilingual needs `flux-general-multi` plus `language_hints`.
 5. **Local development.** No deployment target chosen; no `Dockerfile` or `pcc-deploy.toml` exists. Telephony makes this more pressing than it was: an ngrok URL that changes on every restart is a development tool, not a deployment.
 6. **The user's `.env` has DEEPGRAM, GROQ, CARTESIA and ANTHROPIC keys.** Only the first three are used by the defaults. There are **no** carrier credentials of any kind — neither Twilio nor SignalWire — verified 2026-09-03.
-7. **The repo is not under git.** `git status` reports no repository, so there is no commit history to consult and nothing has been committed.
+7. **The repo *is* under git as of Phase 9** — this changed since Phase 7, which recorded the opposite. One commit ("first commit") on `main`, with a remote at `github.com/MubeenKhalid10/AI-Call-Agent`. `server/` is a nested repository (it shows as a single modified entry in the parent's `git status`), so check both. Nothing from Phases 8 or 9 has been committed; no session of this project has committed anything.
+
+   > ⚠️ **`server/.env` is tracked and was committed in "first commit".** It
+   > holds the live Deepgram, Groq, Cartesia and SignalWire credentials. If that
+   > commit was ever pushed to the GitHub remote, **those keys should be treated
+   > as disclosed and rotated**, and the file untracked
+   > (`git rm --cached server/.env`) with `.env` added to `server/.gitignore` —
+   > which currently exists only at the repository root and does not cover it.
+   > Untracking alone does not remove the key from history. This is contrary to
+   > `AGENTS.md` §5 ("`.env` is git-ignored. Never commit real keys") and to
+   > Phase 9's own rule that a credential must never leave the machine, so it is
+   > recorded here rather than fixed: rotating somebody's keys and rewriting
+   > their published history are their decisions, not a phase's.
+   > `server/__pycache__/` is tracked too, which is harmless but noisy.
 8. **PostgreSQL with pgvector is running locally and the schema exists.** Verified 2026-09-03; the sample knowledge base (`evals/kb`, 2 documents, 25 chunks) was ingested that day for the eval run. It was empty before that.
 9. **`load_dotenv(override=True)`, so `.env` beats the shell environment.** `KB_ENABLED=false uv run bot.py` does *nothing* if `.env` says `KB_ENABLED=true`. This surprised this session; to A/B the knowledge base you must edit `.env`. (`SESSION_IDLE_TIMEOUT_SECS` works from the shell only because `.env` does not set it.)
 
@@ -1073,6 +1281,53 @@ Verify these before relying on them; each was true on 2026-09-02 on this machine
 | `server/tests/fake_carrier.py` | Simulates a carrier against a running bot; no account, no tunnel, no money |
 | `server/tests/fake_browser.py` | Simulates the *browser* against a running bot, including the drop-and-reconnect that nothing else covers |
 | `server/tests/test_realtime.py` | 19 deterministic checks: echo suppression and the peer watchdog |
+
+### New in Phase 9
+
+| Path | Purpose |
+|---|---|
+| `server/src/reliability/__init__.py` | The package's contract: the five duplicate-call mechanisms, and why nothing here imports `campaigns` |
+| `server/src/reliability/retry.py` | `RetryPolicy`, the three verdicts, `call_with_retry`, `guarded`, the presets |
+| `server/src/reliability/idempotency.py` | What makes two requests the same call. Derived keys |
+| `server/src/reliability/guardrails.py` | `CallingWindow`, `PacingLimiter`, `CampaignGuards`, `Decision`, duration |
+| `server/src/reliability/supervisor.py` | In-call failure handling: service failures, a stalled inference, the duration ceiling |
+| `server/src/reliability/health.py` | Every dependency, probed cheaply. No call, no inference, no audio |
+| `server/src/reliability/observability.py` | Call ids on every log line; credential scrubbing; JSON output |
+| `server/src/campaigns/recovery.py` | What a restart does about calls that were in flight. Never dials |
+| `server/health.py` | The health CLI. Exit 0/1/2 |
+| `server/tests/test_reliability.py` | 150+ checks: injected failures, the five mechanisms one at a time |
+
+### Modified in Phase 9
+
+| Path | What changed |
+|---|---|
+| `server/src/campaigns/models.py` | `CallAttemptStatus.UNRESOLVED` (live, recoverable); `LIVE_STATUS_SQL`; `may_advance`; `CallAttempt.idempotency_key` and `.placement_started_at` |
+| `server/src/campaigns/store.py` | `idempotency_key` + `placement_started_at` columns and a partial unique index; the live-status index rebuilt for the new status; `reserve_next_call` takes a key and rolls back on a collision; `mark_attempt_placed` refuses a second call id; `apply_call_event` (idempotent, monotonic); `mark_placement_started`, `mark_attempt_unresolved`, `count_live_attempts`, `list_live_attempts`, `find_attempt_by_key` |
+| `server/src/campaigns/dialer.py` | Guardrails before reserving; placement stamped before the request; `place_call` never retried; `_placement_classifier`; ambiguous → `UNRESOLVED`; a duplicate call id hangs the duplicate up; `refresh` made idempotent; structured logging |
+| `server/src/campaigns/service.py` | `next_call` supplies the idempotency key; `record_outcome(write_result=)` |
+| `server/src/telephony/base.py` | `find_recent_calls`, `check_credentials`, `CallSnapshot.created_at`, `TelephonyError.retryable` |
+| `server/src/telephony/twilio.py` | Both new methods; a per-request timeout; a timeout is its own error branch; `date_created` parsed |
+| `server/src/telephony/signalwire.py`, `__init__.py` | `timeout_secs` passed through |
+| `server/src/config.py` | `ReliabilityConfig` (twelve settings), `describe_safety()` |
+| `server/src/services.py` | `_apply_request_timeout`: the LLM client's own HTTP timeout |
+| `server/src/prompts.py` | `MAX_DURATION_INSTRUCTION`, `SERVICE_TROUBLE_INSTRUCTION` |
+| `server/bot.py` | `configure_logging`; the supervisor, its observer and its ending path; call context bound for the session; safety and retry policies at startup |
+| `server/campaign.py` | `recover`; guardrails always supplied; recovery before `call`; `--no-recover`; pacing between calls; an ambiguous placement stops the run |
+| `server/tests/test_telephony.py` | `StubSession` records params/timeout/headers and answers `get`; `_sent` helper |
+| `server/tests/test_campaigns.py` | `check_phase9`: the SQL half of duplicate protection, event idempotency, recovery |
+| `README.md`, `HANDOFF.md`, `server/.env.example` | Phase 9 |
+
+### Untouched by Phase 9
+
+`call.py`, `ingest.py`, every `src/conversation/` module, `src/actions/`,
+`src/scheduling/`, `src/retrieval.py`, `src/knowledge_store.py`,
+`src/embeddings.py`, `src/documents.py`, `src/turns.py`, `src/metrics.py`,
+`src/resilience.py`, `src/diagnostics.py`, `src/campaigns/{phone,csv_import,briefing,results}.py`,
+`src/telephony/{transport,session}.py`, every eval scenario.
+
+The pipeline order did not change and no prompt sent to the model on an
+ordinary turn changed — the two new instructions are only used when the
+supervisor ends a call.
 
 ### New in Phase 8
 
@@ -1310,6 +1565,32 @@ model reads `success` and `guidance` and nothing else.
 
 The assistant aggregator sits **after** `transport.output()` on purpose: it records what the caller actually heard, so an interrupted reply is stored truncated at the point it was cut off.
 
+### How a call is placed safely (Phase 9)
+
+```
+campaign.py call
+  → AttemptRecovery.run()                    resolve anything left live by an earlier run. Never dials
+  → guards.check(live_calls)                 calling hours, concurrency, pacing — BEFORE reserving
+  → service.next_call()                      reserve in one transaction, stamped with an idempotency key
+  → service.check_callable()                 re-check against fresh rows (a DNC that landed since)
+  → guards.window.check(prospect timezone)   the prospect's own hours
+  → store.mark_placement_started()           stamped BEFORE the request, so a crash here is recoverable
+  → call_with_retry(place_call, NEVER_RETRY) exactly one attempt, with a timeout
+      ├─ CallSetupError   → FATAL      → release the attempt, record FAILED. No phone rang
+      ├─ ProviderUnavail. → AMBIGUOUS  → mark_attempt_unresolved(). Attempt stays LIVE, prospect blocked
+      └─ success          → mark_attempt_placed(). A second, different call id is refused and hung up
+```
+
+and later, from any process:
+
+```
+campaign.py recover
+  → store.list_live_attempts(older_than)     nothing younger than RECOVERY_MIN_AGE_SECS
+  → has a call id?      → fetch_call()       → apply_call_event() (monotonic, idempotent)
+  → UNRESOLVED/placing? → find_recent_calls() → adopt the call, or close as failed. NEVER dials
+  → never placed?       → release it
+```
+
 ### How a result is written (Phase 8)
 
 ```
@@ -1442,6 +1723,32 @@ SESSION_IDLE_TIMEOUT_SECS=3600 USER_IDLE_TIMEOUT_SECS=120 \
 
 **`USER_IDLE_TIMEOUT_SECS=120` is not optional and is new.** In text mode a turn is an HTTP round trip rather than a person talking, and the gap between two scenario turns routinely exceeds the 12-second production default — so the silence handler decides the caller has gone quiet and injects a nudge *between* the scenario's turns. Observed on 2026-09-03: the nudge landed after the prospect's question, the model answered the nudge, and the scenario failed for a reason unrelated to what it tested. Both overrides reach the spawned bots because neither is set in `.env`; anything `.env` *does* set would win instead (Failed §13).
 
+### The Phase 9 manual failure tests (2026-09-04)
+
+Against the real database, the real bot and the **live SignalWire account**.
+Each one injects a failure and checks what the system does about it.
+
+| Drill | What was done | What happened |
+|---|---|---|
+| Closed calling window | `CALLING_HOURS=03:00-03:01`, `campaign.py call` | Refused **before reserving**: "outside calling hours … the window opens Mon 07 Sep 03:00". No attempt spent |
+| Carrier refuses | Real SignalWire, an unverified number | `call.refused` (21219), attempt released as `FAILED`, `FAILED` call result written. No phone rang |
+| **Ambiguous placement** | Carrier pointed at a non-routable address, `CARRIER_TIMEOUT_SECS=3` | One attempt only, `AMBIGUOUS`, attempt held `UNRESOLVED`, run stopped with "Run `campaign.py recover`" |
+| Prospect blocked afterwards | `campaign.py call` again | Refused: "concurrency limit reached: 1 call(s) live, limit 1". The held attempt is doing its job |
+| Health notices it | `health.py database` | `DEGRADED … 1 live attempt(s) — run campaign.py recover if no calls are in progress` |
+| **Recovery, live** | `campaign.py recover --all`, real SignalWire | Queried the carrier for recent calls to that number, found none, closed the attempt as `FAILED` with "nothing was dialled", freed the prospect. **`find_recent_calls` has now been exercised against a live carrier** |
+| Restart mid-reservation | Reserved a call, then abandoned the process | `recovery.released` — "reserved before a restart and never dialled". Nothing was placed |
+| Database unreachable | `DATABASE_URL` at a dead port | `health.py` reports `FAILED`, and the DSN password is scrubbed to `postgresql:***localhost` |
+| Bad LLM key / retired model | A wrong key, then `GROQ_MODEL=not-a-real-model` | `FAILED credentials rejected (HTTP 401)`, and `DEGRADED groq does not list 'not-a-real-model' … Set GROQ_MODEL` |
+| **Call over its ceiling** | Bot with `MAX_CALL_SECS=25`, `fake_carrier.py` | Ended at 26s. The goodbye could not be generated (Groq's daily quota was exhausted), so the 12-second grace fired and the call ended anyway — the fallback path working under a real failure |
+| **LLM outage on the greeting** | Bot run while Groq's daily budget was exhausted | Found two bugs; see [Failed §25](#25-counting-an-llm-failure-and-then-immediately-forgetting-it-phase-9) and [§26](#26-a-threshold-that-cannot-be-reached-because-nothing-tries-again-phase-9). After the fix: `session.dead_on_arrival`, call ended in 4s, summary says `THE AGENT NEVER SPOKE` |
+| Structured logs | `LOG_FORMAT=json` and text | Both carry `campaign/prospect/attempt/call/provider`; the real Groq key printed deliberately came out as `***` |
+| Full health check | `uv run health.py` | All seven components OK, including SignalWire's account read and the Groq model catalogue |
+
+Not exercised: a duplicate carrier **webhook** against a live endpoint (there is
+no webhook route — status is still polled; the idempotent `apply_call_event`
+that would receive one is covered in both check scripts), and a real answered
+call, which no session of this project has ever had.
+
 ### The Phase 8 manual test (2026-09-04)
 
 Against the real database and the real bot (Deepgram Flux, Groq/Qwen, Cartesia),
@@ -1473,21 +1780,42 @@ backend stubbed), and the dialer's reconciliation path against a real carrier
 
 ### The deterministic checks
 
-Eight scripts that need no vendors and no phone, and finish in seconds:
+Nine scripts that need no vendors and no phone, and finish in seconds:
 
 ```bash
 uv run python tests/test_conversation.py  # the sales layer — states, qualification, signals, tools, transcript, all 14 scenarios
 uv run python tests/test_results.py       # Phase 8 — the call result: every required case, precedence, validation, summary, export
+uv run python tests/test_reliability.py   # Phase 9 — injected failures: duplicate calls, restarts, retries, guardrails, the supervisor
 uv run python tests/test_actions.py       # Phase 7 — every tool through the real boundary, stubbed world
 uv run python tests/test_scheduling.py    # Phase 7 — local calendar arithmetic; Cal.com against a stub session
 uv run python tests/test_knowledge.py     # retrieval, chunking, the gate, what the LLM is handed
 uv run python tests/test_telephony.py     # placement, transfer, outcomes, errors, handshake, config
 uv run python tests/test_realtime.py      # echo suppression, the peer watchdog
-uv run python tests/test_campaigns.py     # phones, CSV, the queue, DNC, the dialer, callbacks, meetings, results (SQL half needs PostgreSQL)
+uv run python tests/test_campaigns.py     # phones, CSV, the queue, DNC, the dialer, callbacks, meetings, results, duplicate protection (SQL half needs PostgreSQL)
+
+uv run health.py                          # Phase 9 — every dependency, no call placed
+uv run campaign.py recover                # Phase 9 — resolve attempts left live by a crash
 ```
 
-All eight pass as of 2026-09-04 (291, 258, 200+, and 217 checks in the four
-that changed or were added).
+All nine pass as of 2026-09-04.
+
+`test_reliability.py` is the Phase 9 one, and it is the only script in this
+project that *injects* failures rather than avoiding them: `FlakyCarrier` can be
+told to time out, refuse, or vanish mid-request; `FakeStore` can be told its
+database has gone away. The code under test is the real dialer, the real
+recovery pass and the real supervisor. It covers the phase's list — a carrier
+failure, an STT/LLM/TTS failure, a database that is unavailable, a calendar
+failure (through the guarded-write helper), a duplicate webhook, a duplicate
+call request, and a process restart — plus the retry policy's three verdicts,
+the calling window, pacing, concurrency, the duration ceiling, and the
+credential scrubbing. The five duplicate-call mechanisms are each driven **on
+their own**, with the others out of the way, so a regression in any one of them
+fails a check rather than being covered by the next.
+
+Its SQL half is `check_phase9` in `test_campaigns.py`: the unique index refusing
+a second reservation, `mark_attempt_placed` refusing a second carrier call id,
+`apply_call_event` being idempotent and monotonic against real rows, and a
+recovery pass over a real `UNRESOLVED` attempt.
 
 `test_results.py` is the Phase 8 one. Every result in it is built from a real
 `SalesConversation` driven through the real tools, with a scripted
@@ -1634,10 +1962,18 @@ Greeting (connect → first audio) 2.4 – 3.0s, almost all websocket setup to t
 
 ## 12. Next recommended steps
 
-**The user has not specified Phase 9. Ask before building.**
+**The user has not specified Phase 10. Ask before building.**
 
-**Do these first, whatever Phase 8 turns out to be.** None is a phase; each is
+**Do these first, whatever Phase 10 turns out to be.** None is a phase; each is
 small and each blocks honest work on anything else:
+
+0. **Deal with `server/.env` being in git** — see [Assumptions §7](#7-assumptions).
+   It carries the live Deepgram, Groq, Cartesia and SignalWire credentials and it
+   is in the first commit, against a GitHub remote. Rotate the keys if that
+   commit was pushed, untrack the file (`git rm --cached server/.env`), and add
+   `.env` to a `server/.gitignore` — the root `.gitignore` does not cover the
+   nested repository. Phase 9 went to some trouble to keep credentials out of
+   logs; leaving them in version control makes that beside the point.
 
 1. **Decide what to do about the Groq tier.** It is the one thing that makes
    Phase 7 unusable on a live call today, and it is not a code change. Options,
@@ -1658,17 +1994,20 @@ small and each blocks honest work on anything else:
 4. **Set `CALENDAR_TIMEZONE`.** It is UTC and the startup log says so; the
    prospects are not in UTC.
 
-Then, what Phase 8 leaves for Phase 9, in the order I would rank them:
+Then, what Phase 9 leaves for Phase 10, in the order I would rank them:
 
-1. **A scheduler, now that callbacks depend on one.** A scheduled callback
-   reopens its membership with `next_attempt_at`; nothing dials it unless a
-   person runs `campaign.py call` at the right moment. A worker over
-   `reserve_next_call` (already `FOR UPDATE SKIP LOCKED`), a concurrency limit,
-   a calling-hours window in `CALENDAR_TIMEZONE`, and — the policy question
-   left open — whether a prospect-requested callback overrides
-   `CAMPAIGN_MAX_ATTEMPTS`. Carrier status webhooks stop being optional here,
-   and they are also what makes the carrier-side result (`record_outcome`)
-   arrive without somebody running `refresh`.
+1. **A scheduler — and Phase 9 built most of what it needs.** A scheduled
+   callback reopens its membership with `next_attempt_at`; nothing dials it
+   unless a person runs `campaign.py call` at the right moment. The pieces that
+   were missing are now there: the calling window, the concurrency limit,
+   pacing, the recovery pass to run at startup, and `Decision.retry_after_secs`
+   so a loop can sleep exactly as long as it should rather than spinning. What
+   remains is the loop itself, plus two decisions: whether a prospect-requested
+   callback overrides `CAMPAIGN_MAX_ATTEMPTS`, and whether the concurrency
+   limit needs to become a database counter once more than one worker exists.
+   Carrier status webhooks stop being optional here —
+   `store.apply_call_event` is already the idempotent entry point one would
+   use.
 2. **Pushing the result to a CRM.** The row, the export and the field mapping
    exist (`results.py`); what is missing is a client, a sync state
    (`synced_at` / external id on `call_results`, or a separate table), and a
@@ -1687,11 +2026,16 @@ Then, what Phase 8 leaves for Phase 9, in the order I would rank them:
    A different carrier API and a second public endpoint; only after a blind
    transfer has been seen to work.
 
-Whatever it is, **run the eight check scripts and the sales suite first** to
-confirm the baseline, and add scenarios alongside the feature rather than
-after it. If the sales suite is run, `campaign.py results` afterwards is worth
-a look: an eval session has no attempt row, so it stores nothing — the
-`fake_carrier.py --attempt` route is the one that does.
+Whatever it is, **run `uv run health.py`, then the nine check scripts, then the
+sales suite** to confirm the baseline, and add scenarios alongside the feature
+rather than after it. If the sales suite is run, `campaign.py results`
+afterwards is worth a look: an eval session has no attempt row, so it stores
+nothing — the `fake_carrier.py --attempt` route is the one that does.
+
+**After any unclean shutdown, run `uv run campaign.py recover`.** `campaign.py
+call` runs it automatically before dialling, but a crashed bot leaves an
+attempt live and a live attempt blocks its prospect until something resolves
+it. `health.py` reports live attempts as degraded for exactly this reason.
 
 ---
 
@@ -1997,6 +2341,84 @@ When a phase writes something to a table, assert on the table.
 - The SQL check counted five results for five attempts; one attempt was left
   `CONNECTED`, which correctly has none.
 
+### 25. Counting an LLM failure and then immediately forgetting it (Phase 9)
+
+**Tried:** `SessionSupervisor` counted consecutive `ErrorFrame`s per stage and
+reset the count on a success — where "success" for the LLM was
+`LLMFullResponseEndFrame`.
+
+**Why it failed:** Pipecat pushes that frame from a `finally` block, so it
+arrives after a *failed* request too. Every LLM error was therefore followed
+immediately by something that reset its own count, and the threshold could
+never be reached. An LLM refusing every single request looked perfectly
+healthy.
+
+**How it surfaced:** running a real call while Groq's daily token budget was
+exhausted. Two complete LLM failures in one session, and the end-of-session
+line still said `no service failures`. No unit check would have caught it —
+the frame ordering is Pipecat's, and a stub would have been written to match
+what I believed it was.
+
+**Fix:** an inference counts as a success only if it produced a token
+(`LLMTextFrame`). `note_llm_output` is checked before the end frame.
+
+**Learned:** "the operation finished" and "the operation worked" are different
+questions, and a framework that reports completion in a `finally` answers only
+the first. The same trap is in `metrics.py`'s TTFB and in Failed §4 — the third
+time this project has been bitten by treating an *end* signal as a *success*
+signal.
+
+### 26. A threshold that cannot be reached because nothing tries again (Phase 9)
+
+**Tried:** With §25 fixed, `MAX_SERVICE_FAILURES=2` and a real Groq outage,
+expecting the call to end after two failed inferences.
+
+**Why it failed:** one failure, then nothing. The greeting's inference failed,
+so the agent never spoke — and the silence escalation that would have produced
+a second inference is armed by `BotStoppedSpeakingFrame`, which only fires when
+the agent *has* spoken. So exactly one LLM request was ever made, the count
+stopped at one, and the call sat in silence for 57 seconds until the session
+idle timeout.
+
+**Fix:** one failure is fatal on its own if the agent has not yet said a word,
+whatever the threshold. There is nothing to recover to on a call that never
+started. Re-run live: the call now ends in 4 seconds with
+`session.dead_on_arrival` and a reason, and the end-of-session summary says
+`THE AGENT NEVER SPOKE`.
+
+**Learned:** a threshold assumes the event can recur. Before setting one, ask
+what *causes* the second occurrence — here nothing did, because the retry
+mechanism was itself downstream of the thing that had failed.
+
+### 27. Smaller things that cost time (Phase 9)
+
+- **`Decision.__bool__` returning False for a refusal** made
+  `decision or None`, `if decision:` and `x if decision else y` all read a
+  refusal as *absence*. It produced a real bug in `dialer._check_guards` (a
+  closed calling window silently allowed the call) and then, an hour later, an
+  identical bug in the check that was meant to catch it — which is how the
+  first one stayed hidden. Now documented on `__bool__`, with `Decision.refused`
+  and `DialResult.refusal` as the forms that cannot be got wrong.
+- **`src/reliability/` importing `src/campaigns/`** made the two circular the
+  moment `service.py` needed an idempotency key. Recovery moved to
+  `campaigns/recovery.py`, which is where `dialer.py` and `briefing.py` already
+  established that a module joining two worlds belongs. `health.py` imports the
+  store inside a function for the same reason.
+- **Two `logger.configure(patcher=...)` calls do not compose** — the second
+  replaces the first. `install_scrubber` was silently removing the patcher that
+  rendered the call context, and every log record then raised `KeyError:
+  '_context'` inside loguru. Split into `load_secrets` (no patcher) and
+  `install_scrubber`, and `extra={"_context": ""}` supplies a default so a
+  future third caller degrades to a plain line instead of an exception.
+- **`.env` beats the shell** (Failed §13, again). Two Phase 9 manual tests set
+  `SIGNALWIRE_SPACE_URL` in the environment and watched the real carrier answer
+  anyway, because `campaign.py` calls `load_dotenv(override=True)` at import.
+  Set it *after* importing the module, or edit `.env`.
+- A `CREATE INDEX IF NOT EXISTS` does **not** update an existing index whose
+  predicate changed. The live-attempts partial index had to be dropped and
+  recreated when `UNRESOLVED` joined the live set, or it would have silently
+  stopped being used by the query that needs it most.
+
 ### 18. Considered and deliberately rejected
 
 - **Lowering `FLUX_EOT_THRESHOLD` to cut the 653ms `turn-end`.** Tempting, and the biggest single latency lever. Rejected because the only evidence available is synthesized speech with clean endings; nothing here justifies a claim that a lower threshold is safe with real callers, and the failure mode is cutting people off. Left at Deepgram's default and documented as a knob.
@@ -2024,6 +2446,13 @@ When a phase writes something to a table, assert on the table.
 - **Storing the transcript only in `call_results` and stripping it from `conversation_data` (Phase 8).** One home per fact is the project's habit. Rejected because `conversation_data` is the raw record a result is rebuilt from, and a raw record missing the transcript would make a rebuild lossy. The duplication is a few kilobytes.
 - **Refusing a malformed outcome in the builder (Phase 8).** Strictness at the wrong layer: the call is over, and a refused build is a lost result. Tolerate and name in the builder; refuse in the validator.
 - **Putting `CallResult` in `models.py` (Phase 8).** It needs the conversation's enums for its vocabulary, and `models.py` is the campaign's own nouns with no upward import. A module of its own, `results.py`, pure like `csv_import.py`.
+- **An idempotency key on the carrier's call-creation request (Phase 9).** The textbook answer, and neither Twilio nor SignalWire offers one for the Calls resource — checked before designing around it. That absence is *why* `place_call` is never retried and why `find_recent_calls` exists: without a key the only way to answer "did it happen" is to ask what exists.
+- **A lock table or a lease with an expiry for reservations (Phase 9).** The usual shape for "one worker holds this work". Rejected: the attempt row already is the lease, its live status already blocks, and an expiry would need a clock that the database and every worker agreed on. Recovery breaks a stale lease by finding out what actually happened, which is strictly better than guessing from a timestamp.
+- **A message broker, or a scheduler daemon, for pacing and concurrency (Phase 9).** The phase's own instruction was not to add distributed infrastructure unless necessary, and it is not: correctness is in PostgreSQL and rate is in-process. The honest cost — a second dialer would exceed the intended rate, though it could not duplicate a call — is written into `guardrails.py` and Known issues rather than papered over.
+- **Retrying `place_call` on a 5xx (Phase 9).** A 5xx is a server error, so the request "obviously" failed. It is not obvious at all: the carrier may have created the call and failed while answering. Treated as ambiguous with everything else.
+- **`ProcessorUnusablePolicy.END` instead of the supervisor (Phase 9).** Pipecat can end the pipeline itself when a processor reports it can no longer work. Rejected because it ends the call *immediately* and silently: no goodbye, no distinction between a stage the agent needs to speak and one it does not, and no count of how many failures preceded it. The supervisor does all three, and the default `CONTINUE` leaves it in charge.
+- **A distinct `Disposition` for a call the supervisor ended (Phase 9).** It would read well in a CRM. Rejected for this phase: it changes Phase 8's closed vocabulary and its validation rules for a case that is already recorded — a note on the result and a reason in the log. Worth revisiting if supervised endings turn out to be common, which would itself be the more interesting finding.
+- **Deriving a prospect's timezone from their phone number (Phase 9).** Rejected for the same reason Phase 5 refused to guess a country for an un-normalisable number: it is right most of the time and invisibly wrong for every country with more than one zone, and the failure is a call at the wrong hour.
 
 ---
 
@@ -2048,11 +2477,14 @@ D:\Ai-Voice-Agent
     │   ├── actions/        # service (the ActionBackend), __init__ (open_actions)
     │   ├── scheduling/     # base, hours, local, calcom, __init__ (make_calendar)
     │   ├── campaigns/      # models, phone, csv_import, store, service, dialer, briefing,
-    │   │                   #   results (Phase 8: the CallResult, pure)
+    │   │                   #   results (Phase 8), recovery (Phase 9)
+    │   ├── reliability/    # Phase 9: retry, idempotency, guardrails, supervisor,
+    │   │                   #   health, observability — imports no campaigns
     │   └── telephony/      # base, twilio, signalwire, transport, session, __init__
+    ├── health.py           # Every dependency, probed cheaply (Phase 9)
     ├── evals/              # Audio suite (7 scenarios) + sales/ (15, text mode), Groq judge
-    ├── tests/              # test_{conversation,results,actions,scheduling,knowledge,
-    │                       #   telephony,realtime,campaigns}.py
+    ├── tests/              # test_{conversation,results,reliability,actions,scheduling,
+    │                       #   knowledge,telephony,realtime,campaigns}.py
     │                       # fake_carrier.py / fake_browser.py — simulate a caller
     │                       #   against a running bot; no account needed
     │                       #   (fake_carrier --prospect/--campaign/--attempt lands a result)
@@ -2061,7 +2493,7 @@ D:\Ai-Voice-Agent
     └── pyproject.toml      # pipecat-ai[anthropic,cartesia,deepgram,evals,runner,silero,webrtc,websocket], tzdata
 ```
 
-**Before changing anything:** run the eight check scripts (seconds, no keys) and note the baseline. Then the two eval suites if you are touching the pipeline or a prompt — and read the Groq note in Known issues before believing a timeout. **After changing anything:** run them again, with `-r 2` on anything you suspect.
+**Before changing anything:** run `uv run health.py` (seconds, no call placed) and the nine check scripts (seconds, no keys), and note the baseline. Then the two eval suites if you are touching the pipeline or a prompt — and read the Groq note in Known issues before believing a timeout. **After changing anything:** run them again, with `-r 2` on anything you suspect.
 
 **Changing a tool is changing the prompt, and the prompt has a budget.** Every tool's docstring is sent on every turn. Measure with a direct request (`usage.prompt_tokens`) before and after — the scratch script that did it is described in Failed §20 — and keep the *how* in `playbook.stage_block`, not in the docstring.
 
