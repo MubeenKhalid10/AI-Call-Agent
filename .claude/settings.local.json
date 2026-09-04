@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pipecat init *)",
+      "PowerShell(foreach \\($n in @\\('DEEPGRAM_API_KEY','ANTHROPIC_API_KEY','CARTESIA_API_KEY','OPENAI_API_KEY'\\)\\) { $v = [Environment]::GetEnvironmentVariable\\($n\\); if \\([string]::IsNullOrEmpty\\($v\\)\\) { \"$n = \\(not set\\)\" } else { \"$n = SET \\(length $\\($v.Length\\)\\)\" } })",
+      "PowerShell(uv run *)",
+      "PowerShell($ok=$false; for\\($i=0;$i -lt 20;$i++\\){ try{ $r=Invoke-WebRequest -Uri \"http://localhost:7860/client\" -UseBasicParsing -TimeoutSec 3; \"HTTP $\\($r.StatusCode\\) - content-length $\\($r.Content.Length\\)\"; $ok=$true; break } catch { Start-Sleep -Milliseconds 700 } }; if\\(-not $ok\\){ \"did not respond after ~14s\" })",
+      "PowerShell(Copy-Item *)"
+    ]
+  }
+}
