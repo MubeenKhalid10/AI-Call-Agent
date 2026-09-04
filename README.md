@@ -873,6 +873,117 @@ synthesized caller stops streaming audio the instant its utterance ends, where a
 real microphone keeps sending. A live call has not been measured here, because
 that needs someone to talk into it.
 
+## The dashboard (Phase 10)
+
+Everything before this reported through a CLI or a log line, which is right for
+placing a call and wrong for "how is the campaign going". That question wants
+eight numbers next to each other.
+
+```bash
+cd server
+uv run dashboard.py                 # http://127.0.0.1:7870
+uv run dashboard.py --once          # the same numbers as JSON, no server
+```
+
+It shows total contacts, total calls, answered, completed, failed, average call
+duration, qualified prospects and meetings booked; then a breakdown of what
+calls came to, a row per campaign, and the fifteen most recent calls with the
+outcome each produced.
+
+**It reads the same PostgreSQL the dialer writes.** No analytics database, no
+warehouse, no scheduled rollup, no second copy of anything. Every figure is a
+SQL aggregate run at the moment you load the page, so it cannot go stale or
+disagree with `campaign.py`. Every route is a `GET`; there is no way to write
+through it, which is what makes it safe to point at a system that is dialling.
+
+Two numbers on it could mislead, so both carry their footnote:
+
+- **Answered and completed overlap and are not the same.** `COMPLETED` is the
+  carrier's word for a call that ran to its end; *answered* is every status
+  meaning somebody picked up, including a call the person ended by asking never
+  to be called again.
+- **An average duration means nothing without the count it averages**, so the
+  tile always says how many calls it is over.
+
+A missing optional table is reported as *unavailable*, never as zero — a zero
+next to "Qualified prospects" is a claim, and an absence is not. On a database
+that predates Phase 8 the page still renders, says which command fixes it, and
+falls back to attempt statuses for the outcome breakdown.
+
+The page is one HTML file with no build step, no framework and no CDN: it
+renders in the browser from `/api/dashboard`, which is also the endpoint any
+other tool should read. It binds to loopback by default, because it has no
+login and shows names and phone numbers; `--host 0.0.0.0` works and prints a
+warning saying so.
+
+## Performance, scale and cost (Phase 11)
+
+Phase 11 measured the system before changing it. The measurements, at 20,000
+prospects and 60,000 call attempts on a development machine:
+
+| Path | Measured | Verdict |
+|---|---|---|
+| The dialer's queries | 0.7–10.7 ms | Fine. Left alone |
+| Retrieval per turn (embed + pgvector) | 29 ms of a ~1,300 ms turn | Not the bottleneck. Left alone |
+| One dashboard load | 249 ms across 7 sequential queries | Fixed |
+| Connections held per call | 2 idle, up to 6 | Fixed |
+| Prompt per LLM request | 3,394 tokens, 40% of it tool schemas | The real cost driver. See below |
+
+**Candidate indexes were measured and rejected.** Six plausible indexes on the
+aggregate queries made every one of them *slower* — a full-table `count(*)` is
+a sequential scan whatever you index, and the extra pages and write cost are
+real. The negative result is in the handoff so nobody adds them again.
+
+### What changed
+
+- **Dashboard queries run concurrently**, not one after another: **249 ms →
+  149 ms (43% faster)**. Same queries, same numbers.
+- **A 5-second snapshot cache** with a lock: 21 simultaneous viewers now cause
+  **1 database read instead of 21**, and a slow read is never started twice.
+- **One connection pool per call instead of two**, when the knowledge base and
+  campaign tables share a database (the default). Measured **2 idle
+  connections per call → 1**, peak 6 → 4. Against PostgreSQL's default 100
+  connections that roughly doubles how many calls can run at once.
+- **The concurrency limit is enforced inside the reservation transaction.** It
+  was checked before reserving, which two workers could pass at the same
+  instant. Six simultaneous reservations against a limit of two now hand out
+  exactly two.
+- **Per-call usage and cost tracking.** Pipecat has reported tokens, characters
+  and audio seconds since Phase 2 and nothing read them. Every call now records
+  what it used onto its attempt row, and the dashboard shows tokens and cost
+  per call.
+
+```bash
+uv run python scripts/benchmark_db.py     # the measurements, at scale, in a throwaway schema
+```
+
+### Cost tracking
+
+Units are measured; prices are configured; nothing is invented. With no rates
+set — the default, since the stack is three free tiers — you get token counts
+and no cost. Set `COST_LLM_INPUT_PER_MTOK` and friends to what you actually
+pay and each call gets a figure.
+
+A stage is priced only when the provider *reported* its usage. Cartesia's TTS
+reports characters; Deepgram's websocket TTS does not, so a call on Deepgram
+TTS lists `tts` as `unmeasured` rather than pricing it at zero. A total quietly
+missing a stage is worse than one that says which stage is missing.
+
+### What was deliberately not done
+
+The largest remaining cost is the prompt: **3,394 tokens per request, of which
+1,248 are the twelve tool schemas**, measured live. Advertising only the tools
+the current stage can use would cut 300–500 tokens per request. It was not
+done, for the reason Phase 7 recorded and this phase confirmed in the installed
+source: Pipecat re-syncs tool handlers on *every* context frame and unregisters
+any tool the frame does not advertise, so a stage-filtered list would register
+and unregister handlers around every inference. That is a real race in the
+layer that enforces do-not-call, and it is not worth 12% of a prompt.
+
+The providers were not changed either. The dominant latency is turn detection
+(653 ms of ~1,300 ms), which is Deepgram's tuned default and where cutting
+people off lives.
+
 ## Testing it
 
 `server/evals/` holds headless conversations that drive the real bot with
@@ -889,13 +1000,15 @@ SESSION_IDLE_TIMEOUT_SECS=3600 uv run python -m pipecat.evals suite evals/suite.
 See [`server/evals/README.md`](server/evals/README.md) for why both of those
 details are load-bearing.
 
-Alongside them are nine deterministic check scripts that need no vendors, no
+Alongside them are eleven deterministic check scripts that need no vendors, no
 database and no phone, and run in seconds:
 
 ```bash
 uv run python tests/test_conversation.py  # the sales layer: states, record, detectors, transcript, all 14 scenarios
 uv run python tests/test_results.py       # Phase 8: the call result — dispositions, validation, summary, transcript
 uv run python tests/test_reliability.py   # Phase 9: injected failures — duplicate calls, restarts, retries, guardrails
+uv run python tests/test_dashboard.py     # Phase 10: the aggregates, the honest footnotes, and that no route writes
+uv run python tests/test_performance.py   # Phase 11: usage accounting, cost, pooling, concurrency, caching
 uv run python tests/test_actions.py       # the Phase 7 tools against a stubbed calendar, store, carrier
 uv run python tests/test_scheduling.py    # the local calendar's arithmetic; Cal.com against a stub HTTP session
 uv run python tests/test_knowledge.py     # retrieval, chunking, what the LLM is handed
@@ -946,6 +1059,7 @@ server/
 ├── bot.py              # Wiring only: transport, pipeline, event handlers
 ├── call.py             # Place one outbound phone call and watch it
 ├── health.py           # Check every dependency, without placing a call (Phase 9)
+├── dashboard.py        # Serve the read-only reporting page (Phase 10)
 ├── campaign.py         # Prospects, campaigns and the call queue
 ├── ingest.py           # Load documents into the knowledge base
 ├── src/
@@ -968,12 +1082,17 @@ server/
 │   │   └── conversation.py / director.py / sources.py / sink.py
 │   ├── actions/        # The backend behind the tools: validation, authorisation, I/O
 │   ├── scheduling/     # Calendar providers: business-hours local calendar, Cal.com
+│   ├── dashboard/      # Phase 10: the reporting page. Reads campaigns/; nothing reads it
+│   │   ├── stats.py       # What each number means, and its footnote. Counts nothing itself
+│   │   ├── page.py        # One HTML document: no build step, no CDN
+│   │   └── web.py         # The routes. Every one of them a read
 │   ├── reliability/    # Phase 9: retries, idempotency, guardrails, health, structured logs
 │   │   ├── retry.py       # May this be tried again? RETRY / FATAL / AMBIGUOUS
 │   │   ├── idempotency.py # What makes two requests the same call
 │   │   ├── guardrails.py  # Calling hours, pacing, concurrency, call duration
 │   │   ├── supervisor.py  # What the bot does when a service fails mid-call
 │   │   ├── health.py      # Every dependency, probed cheaply
+│   │   ├── usage.py       # What a call consumed and what it cost (Phase 11)
 │   │   └── observability.py # Call ids on every line; credentials scrubbed
 │   ├── campaigns/
 │   │   ├── models.py     # Prospect, Campaign, CampaignProspect, CallAttempt, ScheduledCallback, Meeting

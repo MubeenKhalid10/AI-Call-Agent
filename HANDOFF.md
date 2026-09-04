@@ -2,8 +2,9 @@
 
 **Written for whoever picks this up next, including a fresh Claude session with no memory of how it got here.** Read this before touching code. The section that will save you the most time is [Attempted Approaches That Failed](#attempted-approaches-that-failed) — several of the things below look obviously right and are not.
 
-- **Status:** Phase 9 complete. Phase 10 not specified — see [Next recommended steps](#12-next-recommended-steps).
-- **Last verified:** 2026-09-04 (Phase 9). All **nine** deterministic check scripts pass (the eight from before plus `test_reliability.py`), `uv run health.py` reports all seven components OK against the real vendors, and the ambiguous-placement → hold → recover loop was driven end to end against the **live SignalWire API** — see [Testing completed](#10-testing-completed). The Phase 7 Groq finding still stands and still gates live use: 8,000 input tokens a minute, 200,000 a day, and a turn with twelve tools costs ~3,100. Read [Known issues](#5-known-issues-and-limitations) before believing a timeout.
+- **Status:** Phase 11 complete. Phase 12 not specified — see [Next recommended steps](#12-next-recommended-steps).
+- **Last verified:** 2026-09-04 (Phase 11). All **eleven** deterministic check scripts pass (the ten from before plus `test_performance.py`), `uv run health.py` reports every component OK, and a live call through `fake_carrier.py` recorded its own token usage onto its attempt row. The Phase 7 Groq finding still stands and is now *measured live*: **3,394 prompt tokens per request**, of which 1,248 are the twelve tool schemas. Read [Known issues](#5-known-issues-and-limitations) before believing a timeout.
+- **Phase 11 measured before it changed anything**, and one measurement is a negative result worth keeping: **six plausible indexes made every dashboard query slower**. Do not add them again — see [Failed §28](#28-indexing-a-full-table-aggregate-phase-11).
 - **Two bugs were found by running Phase 9's own code against a real outage**, both now fixed and both worth knowing about: an LLM failure could never accumulate towards its threshold, and a call whose *greeting* failed sat silent until the idle timeout. See [Failed §25](#25-counting-an-llm-failure-and-then-immediately-forgetting-it-phase-9) and [§26](#26-a-threshold-that-cannot-be-reached-because-nothing-tries-again-phase-9).
 - **Phase 8 fixed a Phase 6 bug worth knowing about:** the attempt status for a callback, a no, or a do-not-call was only written when the call ended *without* the agent's goodbye. It now reads the state path. See [Failed §23](#23-reading-the-attempt-status-from-the-final-state-phase-6-found-in-phase-8).
 - **Stack:** Pipecat 1.8.1, Python 3.12, Deepgram Flux + Groq + Cartesia, SmallWebRTC + Twilio/SignalWire, PostgreSQL (pgvector for the knowledge base, plain tables for campaigns, callbacks, meetings and call results), phonenumbers, tzdata. Optional Cal.com for the calendar. No broker, no lock service, no scheduler daemon — Phase 9's correctness is a transaction and two unique indexes.
@@ -35,8 +36,10 @@ As of Phase 7 the agent does all of that, including booking the meeting: it phon
 | 6 | The sales conversation: state machine, prospect context, objections, DNC, structured qualification | Done (2026-09-03) |
 | 7 | Actions: calendar lookup and booking, scheduled callbacks, DNC, end call, live transfer, knowledge search — strict tool schemas, a validating backend, honest results | Done (2026-09-04) |
 | 8 | The post-call result: one validated `CallResult` per finished attempt, dispositions, the transcript kept verbatim, a deterministic summary, a CRM-ready shape (no integration yet) | Done (2026-09-04) |
-| 9 | Safety and reliability: duplicate-call protection, idempotency, recovery after a restart, bounded retries, campaign guardrails, health checks, structured logs, failure-injection tests | **Done (2026-09-04)** |
-| 10 | Not yet specified by the user — see [Next recommended steps](#12-next-recommended-steps) | Not started |
+| 9 | Safety and reliability: duplicate-call protection, idempotency, recovery after a restart, bounded retries, campaign guardrails, health checks, structured logs, failure-injection tests | Done (2026-09-04) |
+| 10 | The dashboard: a read-only page and JSON endpoint over the existing PostgreSQL — totals, call outcomes, per-campaign statistics, recent calls | Done (2026-09-04) |
+| 11 | Performance, scaling and cost: measured first, then a shared connection pool, concurrent dashboard reads, a snapshot cache, concurrency enforced in the reservation, and per-call usage and cost tracking | **Done (2026-09-04)** |
+| 12 | Not yet specified by the user — see [Next recommended steps](#12-next-recommended-steps) | Not started |
 
 ---
 
@@ -90,9 +93,12 @@ uv run call.py +923001234567
 ```bash
 cd server
 uv run health.py                           # Phase 9 — is every dependency actually up?
+uv run dashboard.py                        # Phase 10 — the reporting page, http://127.0.0.1:7870
 uv run python tests/test_conversation.py   # 291 checks — the sales layer. Run this first
 uv run python tests/test_results.py        # 258 checks — Phase 8: the call result, no database
-uv run python tests/test_reliability.py    # 150+ checks — Phase 9: injected failures
+uv run python tests/test_reliability.py    # 141 checks — Phase 9: injected failures
+uv run python tests/test_performance.py    # 53 checks — Phase 11: usage, cost, pooling, concurrency
+uv run python tests/test_dashboard.py      # Phase 10: the aggregates, the footnotes, the routes
 uv run python tests/test_knowledge.py
 uv run python tests/test_telephony.py
 uv run python tests/test_realtime.py
@@ -232,7 +238,120 @@ speakable output — with turns that belong in the call it is actually on, and
 what happens when a prospect genuinely goes off-topic is
 `sales/unrelated_question.yaml`.
 
-### Phase 9 (this session)
+### Phase 11 (this session)
+
+**It measured first, and the measurements decided what changed.**
+`scripts/benchmark_db.py` seeds a throwaway schema with 20,000 prospects and
+60,000 attempts and times every query the system issues. At that size:
+
+| Path | Measured | What was done |
+|---|---|---|
+| The dialer's queries | 0.7–10.7 ms | Nothing. They are fine |
+| Retrieval per turn (embed 28 ms + pgvector 1.5 ms) | 29 ms of a ~1,300 ms turn | Nothing. It is 2% of a turn |
+| One dashboard load | 249 ms, 7 sequential queries | Made concurrent, then cached |
+| Connections per call | 2 idle, up to 6 | One shared pool: 1 idle, up to 4 |
+| Prompt per LLM request | **3,394 tokens**, 1,248 of them tool schemas | Left alone, with the reason recorded |
+
+**Three optimisations, each with a before and after.**
+
+* *Concurrent dashboard reads.* `collect()` issued eight independent aggregate
+  queries one after another, so a page load cost their sum. `asyncio.gather`:
+  **249 ms → 149 ms, 43% faster**, same queries and same numbers.
+* *A five-second snapshot cache with a lock.* Every open tab refreshed every 15
+  seconds and each refresh was a full pass of aggregates over the database the
+  dialer is using. **21 simultaneous viewers now cause 1 database read instead
+  of 21**, and the lock stops a slow read being started twice — the stampede
+  that turns one slow query into several at the worst moment.
+* *One connection pool per call instead of two.* `KnowledgeStore` and
+  `CampaignStore` both opened their own, and `DATABASE_URL` defaults to
+  `KB_DATABASE_URL`, so the second was usually against the same database.
+  `Config.shares_database` decides, and the campaign store borrows the other's
+  pool through a new `connect(pool=...)`, closing only what it opened.
+  **Measured: 2 idle connections per call → 1, peak 6 → 4**, no leak. Against
+  PostgreSQL's default hundred that roughly doubles the concurrent-call
+  ceiling.
+
+**The concurrency limit now holds under a real race.** Phase 9 counted live
+calls *before* reserving, which two workers could pass at the same instant.
+`reserve_next_call` takes `max_concurrent` and counts inside the transaction
+that takes the row lock. Six simultaneous reservations against a limit of two
+hand out exactly two — checked, and bounded on both sides so it cannot pass by
+handing out none.
+
+**Per-call usage and cost, from data that was already there.**
+`enable_usage_metrics` has been on since Phase 2 and nothing read it.
+`reliability/usage.py` sums what Pipecat reports — tokens, characters, audio
+seconds — onto `call_attempts.usage` and `cost_usd`, and the dashboard grew a
+usage strip. Two rules carried over from earlier phases:
+
+* *Units are measured, prices are configured, nothing is invented.* No rate
+  configured means no cost, never a guessed one.
+* *A stage is priced only if the provider reported it.* Pipecat 1.8.1's
+  **websocket** Deepgram TTS never records characters (only its HTTP variant
+  does), so a call on it lists `tts` under `unmeasured` rather than pricing it
+  at zero. Found by reading a live call's usage and noticing a zero that should
+  have been a number.
+
+**What was deliberately not changed.** The providers, the models, the pipeline
+order, turn detection, retrieval, and the tool list. The dominant latency is
+turn-end at 653 ms of ~1,300 ms, which is Deepgram's tuned default and where
+cutting people off lives; and the dominant cost is the prompt, whose obvious
+fix is blocked by a real framework race (below).
+
+### Phase 10 (previous session)
+
+**A dashboard that adds no data.** `src/dashboard/` plus `dashboard.py`, over
+the PostgreSQL the dialer already writes. No analytics database, no warehouse,
+no scheduled rollup, no cached table — every figure is a SQL aggregate run when
+the page loads, which is why it cannot go stale or disagree with `campaign.py`.
+The eight tiles the phase asked for, a call-outcome breakdown, a row per
+campaign, and the fifteen most recent calls.
+
+**Counting happens in SQL; wording happens in `stats.py`.** Twelve read-only
+aggregate methods went into `campaigns/store.py` — next to the queries they
+resemble, because they need the pool and the table names — and `stats.py`
+turns them into labelled metrics. It counts nothing itself. A dashboard that
+loaded a hundred thousand attempt rows to display "total calls" is one nobody
+leaves open.
+
+**Two numbers could mislead, so both carry a footnote in the data, not the
+CSS.** *Answered* and *completed* overlap and are not the same — `COMPLETED` is
+the carrier's word for a call that ran to its end, *answered* is every status
+meaning somebody picked up, including one that ended in a do-not-call. And an
+average duration is meaningless without the count it averages, so the tile
+always says "over the 40 calls that have a duration". `Metric.detail` is part
+of the JSON, so any other reader gets the caveat too.
+
+**A missing table is `available: false`, never zero.** `call_results` and
+`meetings` arrive in Phases 8 and 7. On an older database those tiles read
+"unavailable", the page says which command fixes it, and the outcome breakdown
+falls back to attempt statuses and labels itself as such. A zero next to
+"Qualified prospects" is a claim; an absence is not.
+
+**One renderer.** The page is a static shell that renders from
+`/api/dashboard` — the endpoint that has to exist anyway — so there is no
+second description of the same numbers to keep in step. No build step, no
+framework, no CDN: `uv run dashboard.py` is the whole setup, and a dashboard
+that needs a CDN round trip before it can draw fails in exactly the situation
+you opened it for.
+
+**Its own process, and every route a read.** Served by `dashboard.py`, not by
+the bot's runner: the runner answers calls, and a page refreshing every fifteen
+seconds has no business in that process. They share the database and nothing
+else — the same seam every other CLI uses. There is no POST, no PUT and no
+DELETE, and `test_dashboard.py` asserts that the application exposes no method
+but GET and HEAD, because "it only reads" is the property that makes it
+defensible to point at a system that is dialling.
+
+**Loopback by default.** No login, and it shows names and phone numbers, so
+`--host 0.0.0.0` is allowed and prints a warning rather than being silently
+convenient.
+
+**Nothing in the voice path changed.** No new dependency either: FastAPI and
+uvicorn arrive with Pipecat, and the only edits outside `src/dashboard/` were
+the store's new read methods, one SQL constant in `models.py`, and docs.
+
+### Phase 9 (previous session)
 
 **The requirement that shaped everything: never two calls to one person.** Five
 independent mechanisms, listed in `src/reliability/__init__.py` and each driven
@@ -548,9 +667,15 @@ will call `CampaignService`, not this file.
 
 ## 4. Pending tasks
 
-Nothing is half-finished. Phase 9 is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
+Nothing is half-finished. Phase 11 is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
 
-- **Phase 10 scope** — the user has not specified it yet. Do not guess and start building.
+- **Phase 12 scope** — the user has not specified it yet. Do not guess and start building.
+- **An existing database needs `uv run campaign.py init` again** for Phase 11's `usage` and `cost_usd` columns. Idempotent; done on this machine. Calls before that recorded no usage, and `attempt_counts` reports `usage_available: false` rather than zeros.
+- **Per-call usage is recorded from Phase 11 onwards only.** There is no backfill and there cannot be: the token counts were never captured for earlier calls. The dashboard says how many calls have usage next to every figure derived from it.
+- **TTS characters are not measured on the Deepgram TTS path.** Pipecat 1.8.1's websocket Deepgram TTS never reports them (Cartesia does), so a cost total on that path names `tts` as `unmeasured`. `TTS_PROVIDER=cartesia` measures it. See [Failed §29](#29-believing-a-zero-that-nobody-measured-phase-11).
+- **The prompt is still 3,394 tokens per request**, 1,248 of them tool schemas. The obvious fix is measured, understood, and blocked — see [Considered and rejected](#18-considered-and-deliberately-rejected).
+- **The dashboard has no authentication and no filtering.** It is an operator's local tool: loopback by default, everything or nothing, no date range and no per-campaign drill-down. A login and a campaign filter are the two things anyone will ask for first, and both are small — the JSON endpoint already takes the shape a query string would filter, and `disposition_counts` already accepts a `campaign_id`.
+- **The dashboard does not auto-start with anything.** `uv run dashboard.py` is a separate command from `uv run bot.py`. That is deliberate (see [Decisions](#phase-10)), but it does mean somebody has to remember to run it.
 - **An existing database needs `uv run campaign.py init` again** for the Phase 9 columns (`idempotency_key`, `placement_started_at`) and the rebuilt live-attempts index. Idempotent; done on this machine. Attempts written before it have no idempotency key, which is safe — the reservation lock still protects them — and every new attempt gets one.
 - **There is still no webhook endpoint.** Carrier status is polled. `apply_call_event` is written to be the entry point for a webhook when one arrives — it is idempotent and takes a carrier call id — but nothing serves one, so "duplicate webhook" is covered by the check scripts and not by a live delivery.
 - **The concurrency limit and pacing are in-process.** With `MAX_CONCURRENT_CALLS=1` and one dialer they are exact. Two dialers would each allow their own limit; they could not cause a *duplicate call* (that is protected in the database) but they could exceed the intended rate. A shared limit needs either a database counter or the scheduler that Phase 9 deliberately did not build.
@@ -698,6 +823,10 @@ Phase 6 answered the product question that kept those two open: the agent is a s
 | `questions` is a heuristic | A question phrased as a statement is missed; "do it by hand" opens with an interrogative and may be kept | Phase 8. Verbatim and beside the transcript, so a reader can see. `extract_questions` is one function to tune |
 | A result's duration is the bot's view on a phone call | A second or two shorter than the carrier bills; `call_attempts.duration_seconds` takes the carrier's on reconciliation | Phase 8. `source` on the row says who wrote it; both numbers are kept, on their own rows |
 | Results are not backfilled automatically | An attempt that finished before `campaign.py init` added the table has no row | `uv run campaign.py rebuild-results`, once. Done on this machine |
+| Usage is measured only from Phase 11 onwards | Averages over "calls with usage" cover a subset of the history | No backfill is possible — the counts were never captured. Every derived figure states the count it is over |
+| Deepgram's websocket TTS reports no characters | A cost total on that path omits TTS and says so (`unmeasured`) | Pipecat 1.8.1 only instruments its HTTP variant. `TTS_PROVIDER=cartesia` measures it |
+| The dashboard cache is in-process | Two dashboard processes each keep their own, so a read every 5 s each | Holds no state that can be wrong, only numbers that were true a moment ago |
+| The prompt is 3,394 tokens per request | On the free Groq tier that is ~2.4 requests per minute before throttling | 1,248 tokens are tool schemas; the fix is blocked by a framework race, see Considered and rejected |
 | An ambiguous placement blocks its prospect until recovery runs | One prospect uncalled, for as long as nobody runs `campaign.py recover` | Phase 9, deliberate and the safe direction. `campaign.py call` runs recovery first; `health.py` flags live attempts as degraded |
 | Recovery cannot resolve an attempt if the carrier cannot list calls | The attempt is closed as failed and the reason says to check the carrier's log by hand | Both supported carriers *can* list calls, and it was exercised live against SignalWire. A future carrier without the endpoint gets the honest dead end rather than a guess |
 | Concurrency and pacing are in-process | Two dialers would each allow their own limit | Cannot cause a duplicate call — that is protected in the database. It is a rate limit, not a correctness one |
@@ -875,6 +1004,107 @@ when this becomes a scheduler — the attempt row is already keyed by
 stream parameters, using the mechanism Phase 4 built. Phase 6 reads them, in
 `conversation/sources.py`, without the campaign tables becoming reachable from
 `bot.py`.
+
+### Phase 11
+
+**Measure, then change, then measure again — and keep the negative results.**
+Six indexes that looked obviously right made every query slower, and that is
+now written down so nobody adds them again. The first benchmark run was
+cold-cache and reported numbers 2–5× the warm ones, which nearly justified
+optimising the wrong thing; the benchmark takes medians of warmed queries for
+that reason.
+
+**Fewer repetitions, not cheaper scans.** A full-table aggregate has no subset
+to seek to, so the cost of the dashboard was never going to come down per
+query. It came down by running the eight queries at once and by not running
+them again for five seconds.
+
+**The cache is short and locked.** Five seconds is well under the page's
+15-second refresh, so one viewer never sees a figure older than they expect,
+while N viewers cost what one does. The lock matters as much as the TTL: without
+it, N requests arriving on a cold cache all start their own read, which is the
+stampede that makes a slow query slowest exactly when it is busiest.
+
+**A borrowed pool is used, never closed.** The same `owns_*` pattern
+`TwilioProvider` already used for its HTTP session. `Config.shares_database`
+decides, so two genuinely separate databases still get two pools.
+
+**The concurrency limit moved inside the transaction.** Checking before
+reserving is cheaper and gives a reason, so both are kept — but only the count
+inside the reservation's own transaction can hold when two workers check at the
+same instant. Advisory limits are fine for rate; this one is about not dialling
+more people at once than intended.
+
+**Usage lives on the attempt, not on the call result.** Phase 8's `CallResult`
+is the CRM-facing reading of a call; tokens and cost are operational. A CRM
+wants to know the prospect was qualified, an operator wants to know the call
+spent 6,000 tokens.
+
+**Prices are configuration, units are measurement.** The default stack is three
+free tiers where the honest per-call cost is "nothing until the tier runs out",
+so an unset rate produces no number rather than a zero. And a stage nobody
+reported is named rather than priced at zero — the third phase in a row where
+"absent is not zero" turned out to be the load-bearing rule.
+
+**The pipeline was not touched.** The instruction said not to optimise by
+swapping providers, and the measurement agreed: turn detection is 653 ms of a
+~1,300 ms turn and is Deepgram's own tuned default, where the failure mode is
+cutting people off mid-sentence.
+
+### Phase 10
+
+**A separate process, not a route on the bot's runner.** Mounting the dashboard
+on Pipecat's dev runner would have been fewer lines and is the obvious move.
+Rejected: that process answers phone calls, and a reporting page that refreshes
+every fifteen seconds has no business sharing it. Every other tool here —
+`campaign.py`, `call.py`, `health.py`, `ingest.py` — already reaches the system
+through PostgreSQL alone, and the dashboard is one more reader.
+
+**Aggregates on `CampaignStore` rather than a new query module.** They need the
+connection pool and the table-name constants, both of which are the store's, and
+splitting reporting SQL into a second module would mean either exposing the pool
+or duplicating the constants. `campaign_counts` already lived there, so the
+precedent was set.
+
+**Counting in SQL, wording in Python.** The arithmetic belongs next to the
+tables it reads and the phrasing belongs next to the page that shows it. It also
+means the numbers stay correct when the history is large: `stats.py` never
+fetches a row.
+
+**Scalar subqueries for the per-campaign table, not joins.** Joining memberships
+*and* attempts to campaigns multiplies them — a campaign with 3 memberships and
+4 attempts reports 12 of each — and the usual fix, `count(DISTINCT ...)` on
+every column, is slower and easy to forget on the next column somebody adds. A
+check pins this.
+
+**Rendering in the browser from the JSON, not on the server.** The JSON endpoint
+has to exist regardless — it is the reusable half — so rendering the page from
+it means one renderer. Server-rendering the same numbers as well would be two
+descriptions of one dataset to keep in step, which is the duplication this phase
+was told to avoid. The cost is that the page needs JavaScript, and `<noscript>`
+says what to read instead.
+
+**Everything inline: no build step, no framework, no CDN.** `uv sync` is the
+only install step this project has, and a dashboard that needs a CDN round trip
+before it can draw fails in exactly the situation you opened it for.
+
+**`available: false` rather than `0` for a missing table.** A zero next to
+"Qualified prospects" is a claim about the pipeline; an absence is not. The same
+distinction Phase 6 made with `UNKNOWN` enum members and Phase 8 made with
+`issues` on the call result.
+
+**Both halves of the answered/completed overlap are shown.** Reporting only
+"answered" overstates clean endings; only "completed" undercounts reached
+people. Showing both and explaining the overlap in `detail` is the only honest
+option, and the explanation travels in the JSON rather than living in the page.
+
+**Times in the campaign timezone, formatted on the server.** The viewer's local
+zone would make the dashboard and `campaign.py` two answers to one question, and
+the campaign zone is the one the agent used when it told a prospect a time.
+
+**Escaping every value in the page.** Prospect names and company names come from
+somebody else's CSV and carrier messages come from a vendor. A check renders a
+hostile name through the real render functions and asserts it comes out escaped.
 
 ### Phase 9
 
@@ -1281,6 +1511,76 @@ Verify these before relying on them; each was true on 2026-09-02 on this machine
 | `server/tests/fake_carrier.py` | Simulates a carrier against a running bot; no account, no tunnel, no money |
 | `server/tests/fake_browser.py` | Simulates the *browser* against a running bot, including the drop-and-reconnect that nothing else covers |
 | `server/tests/test_realtime.py` | 19 deterministic checks: echo suppression and the peer watchdog |
+
+### New in Phase 11
+
+| Path | Purpose |
+|---|---|
+| `server/src/reliability/usage.py` | What a call consumed and what it cost. Units measured, prices configured, unreported stages named |
+| `server/scripts/benchmark_db.py` | Seeds a throwaway schema at scale and times every query. The before/after column |
+| `server/tests/test_performance.py` | 53 checks: usage accounting, cost honesty, pooling, the reservation race, the cache |
+
+### Modified in Phase 11
+
+| Path | What changed |
+|---|---|
+| `server/src/campaigns/store.py` | `connect(pool=...)` and `owns_pool`; `usage`/`cost_usd` columns; `save_call_usage`; `attempt_counts` folds in usage and degrades without the columns; `reserve_next_call(max_concurrent=)` counts inside the transaction |
+| `server/src/knowledge_store.py` | `connect(pool=...)`, `owns_pool`, and a `pool` property so another store can borrow it |
+| `server/src/campaigns/service.py` | `next_call(max_concurrent=)` |
+| `server/src/campaigns/dialer.py` | Passes the concurrency limit into the reservation as well as checking it first |
+| `server/src/campaigns/briefing.py` | `open_briefing(pool=...)`; `_store_usage` writes what the call consumed |
+| `server/src/conversation/conversation.py` | `finish(usage=, cost=)`; the outcome carries both |
+| `server/src/dashboard/stats.py` | The eight reads run concurrently; a usage-and-cost strip |
+| `server/src/dashboard/web.py` | `_SnapshotCache` (TTL + lock); the pool sized for one page load; `read_ms` on the payload |
+| `server/src/dashboard/page.py` | The usage strip, and the read time in the header |
+| `server/src/config.py` | `CostConfig`, `Config.shares_database` |
+| `server/bot.py` | The shared pool, the `UsageObserver`, usage through `finish`, the `USAGE`/`COST` lines, `_report_scale` |
+| `server/src/reliability/__init__.py` | Exports the usage module |
+| `README.md`, `HANDOFF.md`, `server/.env.example` | Phase 11 |
+
+### Untouched by Phase 11
+
+`call.py`, `campaign.py`, `health.py`, `ingest.py`, `dashboard.py`, every
+`src/conversation/` module except one method signature, `src/actions/`,
+`src/scheduling/`, `src/telephony/`, `src/services.py`, `src/turns.py`,
+`src/retrieval.py`, `src/metrics.py`, `src/prompts.py`, `src/embeddings.py`,
+every eval scenario.
+
+**The voice pipeline, the providers and the models were not changed at all** —
+which was the instruction, and which the measurement supported: the dominant
+latency is turn detection at a vendor default, and the dominant cost is prompt
+size rather than per-token price.
+
+### New in Phase 10
+
+| Path | Purpose |
+|---|---|
+| `server/src/dashboard/__init__.py` | The package's contract: reads `campaigns/`, nothing reads it, adds no data |
+| `server/src/dashboard/stats.py` | What each number means and its footnote. Counts nothing itself |
+| `server/src/dashboard/page.py` | The document: one HTML file, no build step, no CDN |
+| `server/src/dashboard/web.py` | The routes — a page, a JSON endpoint, a ping. All reads |
+| `server/dashboard.py` | The CLI. `--once` prints the JSON and starts no server |
+| `server/tests/test_dashboard.py` | 60+ checks: the aggregates in real SQL, the footnotes, the degraded database, and that no route writes |
+
+### Modified in Phase 10
+
+| Path | What changed |
+|---|---|
+| `server/src/campaigns/store.py` | A "Reporting" section: `prospect_counts`, `attempt_counts`, `result_counts`, `disposition_counts`, `meeting_counts`, `callback_counts`, `campaign_overview`, `campaign_result_counts`, `recent_call_rows`, `results_for_attempts`. All read-only |
+| `server/src/campaigns/models.py` | `REACHED_STATUS_SQL`, so "answered" means the same thing in SQL as `reached_person` does in Python |
+| `README.md`, `HANDOFF.md` | Phase 10 |
+
+### Untouched by Phase 10
+
+`bot.py`, `call.py`, `campaign.py`, `health.py`, `ingest.py`, every
+`src/conversation/` module, `src/reliability/`, `src/actions/`,
+`src/scheduling/`, `src/telephony/`, `src/services.py`, `src/turns.py`,
+`src/retrieval.py`, `src/config.py`, `.env.example`, every eval scenario.
+
+The pipeline, the telephony layer, STT, LLM, TTS and the RAG stage were not
+touched at all, and no new dependency was added: FastAPI and uvicorn arrive
+with Pipecat. The dashboard introduced **no new settings** — it reads
+`DATABASE_URL` and `CALENDAR_TIMEZONE`, and its port is a command-line flag.
 
 ### New in Phase 9
 
@@ -1778,14 +2078,96 @@ scripts drive every one of those through the real conversation layer with the
 backend stubbed), and the dialer's reconciliation path against a real carrier
 (no answered call has ever been placed from this machine).
 
+### The Phase 11 measurements (2026-09-04)
+
+`uv run python scripts/benchmark_db.py --prospects 20000 --attempts 60000`, in
+a throwaway schema on the development machine. **Warm-cache medians** — the
+first (cold) run reported 2–5× these and nearly justified the wrong fix.
+
+| Query | Median | Note |
+|---|---|---|
+| `has_live_attempt` | 0.7 ms | |
+| `count_live_attempts` | 0.9 ms | |
+| `recent_call_rows` | 1.8 ms | |
+| `prospect_counts` | 5.4 ms | |
+| `reserve_next_call` | 10.7 ms | Seq scan on prospects; a partial index made it *worse* |
+| `disposition_counts` | 19.6 ms | |
+| `attempt_counts` | 40.1 ms | Full-table aggregate |
+| `campaign_overview` | 41.8 ms | Eight scalar subqueries per campaign |
+| `result_counts` | 64.0 ms | Full-table aggregate |
+| `campaign_result_counts` | 76.6 ms | Group-by over every result row |
+
+**Before and after:**
+
+| | Before | After |
+|---|---|---|
+| One dashboard load | 249 ms (7 sequential queries) | **149 ms** (concurrent) — 43% faster |
+| 21 simultaneous viewers | 21 database reads | **1 read** (5 s cache + lock) |
+| Idle connections per call | 2 | **1** (shared pool) |
+| Peak connections per call | 6 | **4** |
+| Six racing reservations, limit 2 | advisory | **exactly 2 handed out** |
+
+**Per-turn costs, measured separately:** embedding a query 27.9 ms, pgvector
+search 1.5 ms — 29 ms of a ~1,300 ms turn, so retrieval was left alone. The
+embedder's one-off warm-up is 1.4 s at startup.
+
+**Prompt composition, measured locally and confirmed live:**
+
+| Part | Size |
+|---|---|
+| System instruction | ~1,635 tokens |
+| Twelve tool schemas | **1,248 tokens (40%)** |
+| Per-turn guidance block | ~228 tokens |
+| Live measurement on a real call | **3,394 prompt tokens per request** |
+
+The largest single tool is `record_discovery` at ~206 tokens; the smallest,
+`end_call`, is ~54.
+
+**The live end-to-end check.** A call driven through `fake_carrier.py` with
+campaign ids, against the real database: the bot logged
+`USAGE | 1 LLM request(s) | 3,394 prompt + 38 completion tokens | TTS reported
+no usage | 17s of audio transcribed`, and `call_attempts.usage` for that
+attempt holds the per-model breakdown with `cost_usd` null because no rates are
+configured. Startup logged `1 idle / up to 4 database connections per call
+provider=shared pool`.
+
+### The Phase 10 dashboard test (2026-09-04)
+
+Against the real database, with the dashboard served on port 7870:
+
+| Check | Result |
+|---|---|
+| `uv run dashboard.py --once` | The whole snapshot as JSON: 8 tiles, 3 campaigns, 6 recent calls, 2 outcome rows |
+| The page over HTTP | 200, ~10 KB, every container the script writes to present, no external URL in it |
+| `/api/dashboard` over HTTP | 200 in 130 ms |
+| `/api/ping` | `{"ok": true, "detail": "database reachable"}` |
+| Write routes | `POST /` → 405, `POST /api/dashboard` → 405, `/docs` → 404 |
+| **The page's own script, run in Node against the live JSON** | All eight tiles, 3 campaign rows, 6 recent rows, 2 outcome rows, no unresolved template literal. This is how the render was verified without a browser: the *real* `render`, `campaigns`, `recent` and `outcomes` functions were executed against the served data with a DOM stub |
+| **Escaping** | A prospect name of `<img src=x onerror=…><script>alert(2)</script>` came out escaped in all five places it is rendered, and nowhere raw |
+| The degraded database | With `call_results`, `meetings` and `callbacks` dropped in a temp schema, the page still renders 8 tiles, the survivors are still right, the two affected read "unavailable", and the outcome breakdown falls back to attempt statuses and says so |
+
+**Not done: a browser screenshot.** Seven Chrome browsers were connected to the
+account and choosing one could have opened a window on a different machine, so
+it was skipped rather than guessed at. Running the page's real render functions
+against live data covers what a screenshot would have shown about *correctness*;
+what remains unverified is purely visual.
+
+A real discrepancy the live data exposed: the "Meetings booked" tile read 1
+while every campaign row read 0. Both were right — the Phase 7 booking was made
+on an eval session with no campaign — so `meeting_counts` gained an
+`unattributed` count and the tile now says "1 not tied to a campaign" rather
+than looking like a bug.
+
 ### The deterministic checks
 
-Nine scripts that need no vendors and no phone, and finish in seconds:
+Eleven scripts that need no vendors and no phone, and finish in seconds:
 
 ```bash
 uv run python tests/test_conversation.py  # the sales layer — states, qualification, signals, tools, transcript, all 14 scenarios
 uv run python tests/test_results.py       # Phase 8 — the call result: every required case, precedence, validation, summary, export
 uv run python tests/test_reliability.py   # Phase 9 — injected failures: duplicate calls, restarts, retries, guardrails, the supervisor
+uv run python tests/test_dashboard.py     # Phase 10 — the aggregates in real SQL, the footnotes, the degraded database, no write routes
+uv run python tests/test_performance.py   # Phase 11 — usage accounting, cost honesty, pooling, the reservation race, the cache
 uv run python tests/test_actions.py       # Phase 7 — every tool through the real boundary, stubbed world
 uv run python tests/test_scheduling.py    # Phase 7 — local calendar arithmetic; Cal.com against a stub session
 uv run python tests/test_knowledge.py     # retrieval, chunking, the gate, what the LLM is handed
@@ -1797,7 +2179,16 @@ uv run health.py                          # Phase 9 — every dependency, no cal
 uv run campaign.py recover                # Phase 9 — resolve attempts left live by a crash
 ```
 
-All nine pass as of 2026-09-04.
+All eleven pass as of 2026-09-04.
+
+`test_dashboard.py` is the Phase 10 one, and it checks each layer where that
+layer can actually be wrong: the aggregates against real SQL in a throwaway
+schema (because what is being checked *is* whether `count(*) FILTER (...)`
+counts the right rows), the shaping against fixed inputs (because that is where
+the claims live — that answered and completed differ, that an average carries
+its count, that a missing table is unavailable and not zero), and the routes
+through FastAPI's test client (including that the application exposes no method
+but GET and HEAD).
 
 `test_reliability.py` is the Phase 9 one, and it is the only script in this
 project that *injects* failures rather than avoiding them: `FlakyCarrier` can be
@@ -1962,9 +2353,9 @@ Greeting (connect → first audio) 2.4 – 3.0s, almost all websocket setup to t
 
 ## 12. Next recommended steps
 
-**The user has not specified Phase 10. Ask before building.**
+**The user has not specified Phase 12. Ask before building.**
 
-**Do these first, whatever Phase 10 turns out to be.** None is a phase; each is
+**Do these first, whatever Phase 12 turns out to be.** None is a phase; each is
 small and each blocks honest work on anything else:
 
 0. **Deal with `server/.env` being in git** — see [Assumptions §7](#7-assumptions).
@@ -1994,7 +2385,7 @@ small and each blocks honest work on anything else:
 4. **Set `CALENDAR_TIMEZONE`.** It is UTC and the startup log says so; the
    prospects are not in UTC.
 
-Then, what Phase 9 leaves for Phase 10, in the order I would rank them:
+Then, what Phases 9 to 11 leave for Phase 12, in the order I would rank them:
 
 1. **A scheduler — and Phase 9 built most of what it needs.** A scheduled
    callback reopens its membership with `next_attempt_at`; nothing dials it
@@ -2026,9 +2417,10 @@ Then, what Phase 9 leaves for Phase 10, in the order I would rank them:
    A different carrier API and a second public endpoint; only after a blind
    transfer has been seen to work.
 
-Whatever it is, **run `uv run health.py`, then the nine check scripts, then the
+Whatever it is, **run `uv run health.py`, then the eleven check scripts, then the
 sales suite** to confirm the baseline, and add scenarios alongside the feature
-rather than after it. If the sales suite is run, `campaign.py results`
+rather than after it. `uv run dashboard.py --once` is a quick way to see what
+state the database is actually in before and after. If the sales suite is run, `campaign.py results`
 afterwards is worth a look: an eval session has no attempt row, so it stores
 nothing — the `fake_carrier.py --attempt` route is the one that does.
 
@@ -2419,6 +2811,69 @@ mechanism was itself downstream of the thing that had failed.
   recreated when `UNRESOLVED` joined the live set, or it would have silently
   stopped being used by the query that needs it most.
 
+### 28. Indexing a full-table aggregate (Phase 11)
+
+**Tried:** The dashboard's aggregates were the slowest thing measured
+(`campaign_result_counts` 77 ms, `result_counts` 64 ms, `campaign_overview`
+42 ms over 60,000 rows), and every plan showed a sequential scan. Six indexes
+that looked exactly right: a partial index on callable prospects for the
+queue's join, `(campaign_id, qualification_status, prospect_id)` for the
+qualified-prospect count, `(disposition)` for the group-by, a partial index on
+booked meetings, `(status)` on attempts, and a covering
+`(campaign_id, status) INCLUDE (duration_seconds)`.
+
+**Why it failed:** every measured query got **slower**, several by 20–60%.
+`count(*) FILTER (...)` over a whole table *is* a sequential scan — there is no
+subset to seek to — and adding indexes gives the planner more options to
+consider, more pages to keep warm, and more to maintain on every write, while
+removing no work at all. `reserve_next_call` went 11.3 → 17.9 ms; the
+disposition group-by 18.6 → 24.8 ms.
+
+**What worked instead:** not indexing but *not repeating*. The queries were
+made concurrent (249 → 149 ms) and the result cached for five seconds (21
+viewers → 1 read). The cost of an aggregate is the scan; the fix is to run it
+fewer times, not to make one scan cheaper.
+
+**Learned:** an index helps a query that wants a *subset*. Before adding one,
+ask what it would let the planner skip — and if the answer is "nothing, it
+still reads every row", it is a write-cost regression with no upside. Also: the
+first benchmark run's numbers were 2–5× the warm ones, so a cold-cache
+measurement nearly justified the wrong fix.
+
+### 29. Believing a zero that nobody measured (Phase 11)
+
+**Tried:** Summing Pipecat's usage metrics and reporting the totals, including
+`tts.characters`.
+
+**Why it failed:** a live call came back with 3,394 prompt tokens, 16.6 seconds
+of transcribed audio, and **0 TTS characters** — after the bot had audibly
+spoken. Pipecat 1.8.1's Deepgram TTS has two classes and only the HTTP one
+calls `start_tts_usage_metrics`; the websocket one, which `services.py` builds,
+reports nothing. Cartesia reports both. So the zero was not a measurement, it
+was an absence — and with a TTS rate configured it would have been multiplied
+into a cost total that was quietly too low.
+
+**Fix:** each stage carries `reported`, and `estimate_cost` prices a stage only
+when a provider actually reported it, naming the rest under `unmeasured` with
+`complete: false` on the total.
+
+**Learned:** the same rule Phases 6, 8 and 10 kept arriving at, in a new place:
+*an absent measurement is not a zero*. A summary that omits a line and one that
+reports a zero look identical and mean opposite things — and for money the
+difference is a bill.
+
+### 30. Smaller things that cost time (Phase 11)
+
+- An f-string containing `{usage_columns}` for a later `.format()` evaluates it
+  immediately and raises `NameError`. Escape as `{{usage_columns}}`.
+- `attempt_counts` grew two columns that an un-migrated database does not have,
+  which would have broken the whole dashboard rather than one tile. It now
+  builds the query with or without them and reports `usage_available`.
+- The first race check passed *vacuously*: `len(reserved) <= 2` is also true
+  when the queue hands out nothing. Bounded on both sides.
+- A probe that wrote `{}` to `call_attempts.usage` made the dashboard report
+  "1 call with usage" from an empty record. `{}` is not NULL.
+
 ### 18. Considered and deliberately rejected
 
 - **Lowering `FLUX_EOT_THRESHOLD` to cut the 653ms `turn-end`.** Tempting, and the biggest single latency lever. Rejected because the only evidence available is synthesized speech with clean endings; nothing here justifies a claim that a lower threshold is safe with real callers, and the failure mode is cutting people off. Left at Deepgram's default and documented as a knob.
@@ -2452,6 +2907,10 @@ mechanism was itself downstream of the thing that had failed.
 - **Retrying `place_call` on a 5xx (Phase 9).** A 5xx is a server error, so the request "obviously" failed. It is not obvious at all: the carrier may have created the call and failed while answering. Treated as ambiguous with everything else.
 - **`ProcessorUnusablePolicy.END` instead of the supervisor (Phase 9).** Pipecat can end the pipeline itself when a processor reports it can no longer work. Rejected because it ends the call *immediately* and silently: no goodbye, no distinction between a stage the agent needs to speak and one it does not, and no count of how many failures preceded it. The supervisor does all three, and the default `CONTINUE` leaves it in charge.
 - **A distinct `Disposition` for a call the supervisor ended (Phase 9).** It would read well in a CRM. Rejected for this phase: it changes Phase 8's closed vocabulary and its validation rules for a case that is already recorded — a note on the result and a reason in the log. Worth revisiting if supervised endings turn out to be common, which would itself be the more interesting finding.
+- **Advertising fewer tools per turn (Phase 11, reconsidered and rejected again).** Phase 7 deferred it and listed it as Phase 8's third-ranked item; Phase 11 measured what it is worth and read the source to decide. It is worth 300–500 tokens of a 3,394-token request, 10–15%. It is still not safe: `LLMService.process_frame` calls `_sync_registered_tool_handlers(frame.context.tools)` on **every** `LLMContextFrame`, and that unregisters any auto-registered handler the frame does not advertise. A stage-filtered list would therefore register and unregister handlers around every inference, in the layer that carries `mark_do_not_call`. The prize is 12% of a prompt; the risk is a tool handler missing at the moment it is called. Revisit only with `LLMSetToolsFrame` and a test that drives the unregister race directly.
+- **Replacing a provider for speed (Phase 11).** Explicitly out of scope, and the measurement agrees: the dominant latency is turn detection at 653 ms, which is Deepgram's own tuned default, and the dominant cost is prompt size rather than per-token price.
+- **Caching embeddings per turn (Phase 11).** Retrieval was a suspect before it was measured. It is 29 ms of a ~1,300 ms turn — 2% — and a cache would add a correctness question (a stale embedding for an edited turn) to save nothing anybody can hear.
+- **A materialised view for the dashboard aggregates (Phase 11).** The textbook fix for a slow aggregate. Rejected: it needs a refresh schedule, which is the analytics infrastructure Phase 10 was told not to add, and it trades freshness for speed the cache already provides without either.
 - **Deriving a prospect's timezone from their phone number (Phase 9).** Rejected for the same reason Phase 5 refused to guess a country for an un-normalisable number: it is right most of the time and invisibly wrong for every country with more than one zone, and the failure is a call at the wrong hour.
 
 ---
@@ -2480,11 +2939,15 @@ D:\Ai-Voice-Agent
     │   │                   #   results (Phase 8), recovery (Phase 9)
     │   ├── reliability/    # Phase 9: retry, idempotency, guardrails, supervisor,
     │   │                   #   health, observability — imports no campaigns
+    │   ├── dashboard/      # Phase 10: stats, page, web — reads campaigns/, a leaf
+    │   │                   #   Phase 11: reliability/usage.py — tokens, characters, cost
     │   └── telephony/      # base, twilio, signalwire, transport, session, __init__
     ├── health.py           # Every dependency, probed cheaply (Phase 9)
+    ├── dashboard.py        # The reporting page and its JSON (Phase 10)
     ├── evals/              # Audio suite (7 scenarios) + sales/ (15, text mode), Groq judge
-    ├── tests/              # test_{conversation,results,reliability,actions,scheduling,
-    │                       #   knowledge,telephony,realtime,campaigns}.py
+    ├── tests/              # test_{conversation,results,reliability,dashboard,performance,
+    │                       #   actions,scheduling,knowledge,telephony,realtime,campaigns}.py
+    ├── scripts/            # benchmark_db.py — the Phase 11 measurements, at scale
     │                       # fake_carrier.py / fake_browser.py — simulate a caller
     │                       #   against a running bot; no account needed
     │                       #   (fake_carrier --prospect/--campaign/--attempt lands a result)
@@ -2493,7 +2956,7 @@ D:\Ai-Voice-Agent
     └── pyproject.toml      # pipecat-ai[anthropic,cartesia,deepgram,evals,runner,silero,webrtc,websocket], tzdata
 ```
 
-**Before changing anything:** run `uv run health.py` (seconds, no call placed) and the nine check scripts (seconds, no keys), and note the baseline. Then the two eval suites if you are touching the pipeline or a prompt — and read the Groq note in Known issues before believing a timeout. **After changing anything:** run them again, with `-r 2` on anything you suspect.
+**Before changing anything:** run `uv run health.py` (seconds, no call placed) and the eleven check scripts (seconds, no keys), and note the baseline. `uv run dashboard.py --once` shows what is in the database right now. Then the two eval suites if you are touching the pipeline or a prompt — and read the Groq note in Known issues before believing a timeout. **After changing anything:** run them again, with `-r 2` on anything you suspect.
 
 **Changing a tool is changing the prompt, and the prompt has a budget.** Every tool's docstring is sent on every turn. Measure with a direct request (`usage.prompt_tokens`) before and after — the scratch script that did it is described in Failed §20 — and keep the *how* in `playbook.stage_block`, not in the docstring.
 
