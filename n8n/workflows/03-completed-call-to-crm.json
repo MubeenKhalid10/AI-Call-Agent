@@ -1,0 +1,256 @@
+{
+  "name": "AIVA 03 — completed call → CRM update (HubSpot)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aiva-call-completed",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000001",
+      "name": "Webhook: call.completed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA webhook header"
+        }
+      },
+      "notes": "Point AUTOMATION_WEBHOOK_URL (or AUTOMATION_WEBHOOK_URL_CALL_COMPLETED) at this node's Production URL. The Header Auth credential must match AUTOMATION_WEBHOOK_AUTH_HEADER / AUTOMATION_WEBHOOK_AUTH_TOKEN. Answers 200 at once; the agent's deliverer retries on anything else."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "k1",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "^call\\.(completed|updated)$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            },
+            {
+              "id": "k2",
+              "leftValue": "={{ $json.body.result }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000002",
+      "name": "Is a call result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notes": "Every delivery carries event_id; n8n re-runs are safe because the CRM writes below are keyed on the contact, not on the delivery. To de-duplicate strictly, keep event_id in a Data Table and skip ones already seen."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One flat item for the CRM nodes: who, what happened, and the text a person reads.\nconst body = $input.first().json.body;\nconst p = body.prospect || {};\nconst r = body.result || {};\nconst call = body.call || {};\nconst summary = r.summary || {};\nreturn [{\n  json: {\n    event_id: body.event_id,\n    event: body.event,\n    occurred_at: body.occurred_at,\n    phone: p.phone_normalized || p.phone || '',\n    email: p.email || '',\n    first_name: p.first_name || '',\n    last_name: p.last_name || '',\n    company: p.company || '',\n    disposition: r.disposition,\n    reached: r.reached,\n    qualification: r.qualification_status,\n    interest: r.interest_level,\n    next_action: r.next_action,\n    duration_seconds: r.duration_seconds,\n    summary_text: r.summary_text || '',\n    what_happened: summary.what_happened || '',\n    next_step: summary.next_step || '',\n    pain_points: (r.pain_points || []).join('; '),\n    objections: (r.objections || []).map(o => `${o.kind || ''}: ${o.detail || ''}`).join('; '),\n    meeting_start: r.meeting_start,\n    callback_for: r.callback_scheduled_for,\n    do_not_call: r.disposition === 'DO_NOT_CALL',\n    call_id: call.telephony_call_id,\n    attempt_id: r.call_attempt_id,\n    call_at_ms: call.ended_at ? Date.parse(call.ended_at) : Date.now(),\n  },\n}];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000003",
+      "name": "Flatten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [ ...($json.email ? [{ filters: [{ propertyName: 'email', operator: 'EQ', value: $json.email }] }] : []), { filters: [{ propertyName: 'phone', operator: 'CONTAINS_TOKEN', value: $json.phone.replace(/\\D/g, '').slice(-9) }] } ], properties: ['email', 'phone', 'firstname', 'lastname'], limit: 1 }) }}",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000004",
+      "name": "HubSpot: find contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 200],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "Email first, then the last nine digits of the number (a number stored as 0300 1234567 still matches +923001234567). Any CRM works here: replace the three HubSpot nodes with your CRM's find / update / create."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000005",
+      "name": "Contact exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.results[0].id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { ai_last_disposition: $('Flatten').first().json.disposition, ai_last_call_at: String($('Flatten').first().json.call_at_ms), ai_qualification: $('Flatten').first().json.qualification, ai_next_action: $('Flatten').first().json.next_action, ai_summary: $('Flatten').first().json.summary_text, ai_pain_points: $('Flatten').first().json.pain_points, hs_lead_status: $('Flatten').first().json.do_not_call ? 'UNQUALIFIED' : undefined } }) }}",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000006",
+      "name": "HubSpot: update contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 100],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "The ai_* properties are the ones Phase 15's `campaign.py crm-sync` creates on first run (or create them yourself under Settings → Properties). Delete any you do not have; HubSpot rejects unknown property names."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { firstname: $('Flatten').first().json.first_name, lastname: $('Flatten').first().json.last_name, phone: $('Flatten').first().json.phone, email: $('Flatten').first().json.email || undefined, company: $('Flatten').first().json.company || undefined, ai_last_disposition: $('Flatten').first().json.disposition, ai_last_call_at: String($('Flatten').first().json.call_at_ms), ai_qualification: $('Flatten').first().json.qualification, ai_next_action: $('Flatten').first().json.next_action, ai_summary: $('Flatten').first().json.summary_text } }) }}",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000007",
+      "name": "HubSpot: create contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 320],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Whichever branch ran, carry the contact id forward.\nconst item = $input.first().json;\nconst contactId = item.id || (item.results && item.results[0] && item.results[0].id);\nreturn [{ json: { contactId } }];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000008",
+      "name": "Contact id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/notes",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { hs_timestamp: String($('Flatten').first().json.call_at_ms), hs_note_body: `AI call — ${$('Flatten').first().json.disposition} (${$('Flatten').first().json.event}, ${$('Flatten').first().json.event_id})\\n\\n${$('Flatten').first().json.summary_text}\\n\\nPain points: ${$('Flatten').first().json.pain_points || '—'}\\nObjections: ${$('Flatten').first().json.objections || '—'}\\nNext step: ${$('Flatten').first().json.next_step || '—'}` }, associations: [{ to: { id: $json.contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }] }) }}",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000009",
+      "name": "HubSpot: add note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 200],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "202 is HubSpot's note→contact association. The event_id is written into the note, so a duplicate delivery is visible and can be found."
+    },
+    {
+      "parameters": {},
+      "id": "a3000003-0000-4000-8000-000000000010",
+      "name": "Not a call result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [440, 460]
+    }
+  ],
+  "connections": {
+    "Webhook: call.completed": {
+      "main": [[{ "node": "Is a call result?", "type": "main", "index": 0 }]]
+    },
+    "Is a call result?": {
+      "main": [
+        [{ "node": "Flatten", "type": "main", "index": 0 }],
+        [{ "node": "Not a call result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Flatten": {
+      "main": [[{ "node": "HubSpot: find contact", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: find contact": {
+      "main": [[{ "node": "Contact exists?", "type": "main", "index": 0 }]]
+    },
+    "Contact exists?": {
+      "main": [
+        [{ "node": "HubSpot: update contact", "type": "main", "index": 0 }],
+        [{ "node": "HubSpot: create contact", "type": "main", "index": 0 }]
+      ]
+    },
+    "HubSpot: update contact": {
+      "main": [[{ "node": "Contact id", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: create contact": {
+      "main": [[{ "node": "Contact id", "type": "main", "index": 0 }]]
+    },
+    "Contact id": {
+      "main": [[{ "node": "HubSpot: add note", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

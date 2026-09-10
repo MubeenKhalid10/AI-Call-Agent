@@ -1,0 +1,257 @@
+{
+  "name": "AIVA 02 — campaign → outbound calls (calling window)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a2000002-0000-4000-8000-000000000001",
+      "name": "Weekdays 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 200],
+      "notes": "Resumes the campaign at the start of the calling day. The agent's own CALLING_HOURS still apply underneath; this only decides whether the campaign is ACTIVE at all."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a2000002-0000-4000-8000-000000000002",
+      "name": "Weekdays 18:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "apiBase",
+              "value": "http://127.0.0.1:7890/api/v1",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "campaignName",
+              "value": "Q1 Outreach",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000003",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.apiBase }}/campaigns/{{ encodeURIComponent($json.campaignName) }}/resume",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000004",
+      "name": "POST …/resume",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "resume moves PAUSED (or DRAFT) to ACTIVE; ACTIVE already is changed: false; COMPLETED or CANCELLED is a 409. From here the scheduler (`uv run campaign.py run`) does the dialling — this workflow never places a call."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "apiBase",
+              "value": "http://127.0.0.1:7890/api/v1",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "campaignName",
+              "value": "Q1 Outreach",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000005",
+      "name": "Config (evening)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.apiBase }}/campaigns/{{ encodeURIComponent($json.campaignName) }}/pause",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000006",
+      "name": "POST …/pause",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "Stops the scheduler queueing new calls for this campaign; a call already in progress finishes. Memberships and attempt counts are untouched, so tomorrow's resume carries on where it stopped."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config (evening)').first().json.apiBase }}/campaigns/{{ encodeURIComponent($('Config (evening)').first().json.campaignName) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000007",
+      "name": "GET …/campaigns/{name}",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config (evening)').first().json.apiBase }}/results",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "campaign_id",
+              "value": "={{ $json.campaign.id }}"
+            },
+            {
+              "name": "since",
+              "value": "={{ $now.startOf('day').toUTC().toISO() }}"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000008",
+      "name": "GET …/results?since=today",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('GET …/campaigns/{name}').first().json.campaign;\nconst results = $json.results || [];\nconst by = {};\nfor (const r of results) by[r.disposition] = (by[r.disposition] || 0) + 1;\nconst lines = Object.entries(by).sort().map(([k, v]) => `• ${k}: ${v}`);\nreturn [{\n  json: {\n    text: [\n      `*${campaign.name}* — paused for the evening (${campaign.status}).`,\n      `Members: ${campaign.counts.total} · pending ${campaign.counts.pending} · completed ${campaign.counts.completed} · exhausted ${campaign.counts.exhausted}`,\n      `Calls today: ${results.length}`,\n      ...lines,\n    ].join('\\n'),\n  },\n}];"
+      },
+      "id": "a2000002-0000-4000-8000-000000000009",
+      "name": "Day summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000010",
+      "name": "Slack: day summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1320, 500],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE-ME",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Optional. Delete this node (or swap it for email/Teams) if you do not use Slack."
+    }
+  ],
+  "connections": {
+    "Weekdays 09:00": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Config": {
+      "main": [[{ "node": "POST …/resume", "type": "main", "index": 0 }]]
+    },
+    "Weekdays 18:00": {
+      "main": [[{ "node": "Config (evening)", "type": "main", "index": 0 }]]
+    },
+    "Config (evening)": {
+      "main": [[{ "node": "POST …/pause", "type": "main", "index": 0 }]]
+    },
+    "POST …/pause": {
+      "main": [[{ "node": "GET …/campaigns/{name}", "type": "main", "index": 0 }]]
+    },
+    "GET …/campaigns/{name}": {
+      "main": [[{ "node": "GET …/results?since=today", "type": "main", "index": 0 }]]
+    },
+    "GET …/results?since=today": {
+      "main": [[{ "node": "Day summary", "type": "main", "index": 0 }]]
+    },
+    "Day summary": {
+      "main": [[{ "node": "Slack: day summary", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

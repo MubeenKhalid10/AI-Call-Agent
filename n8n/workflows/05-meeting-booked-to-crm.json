@@ -1,0 +1,228 @@
+{
+  "name": "AIVA 05 — meeting booked → CRM update (HubSpot)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aiva-meeting-booked",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000001",
+      "name": "Webhook: meeting.booked",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA webhook header"
+        }
+      },
+      "notes": "Point AUTOMATION_WEBHOOK_URL_MEETING_BOOKED here. meeting.booked fires the moment the calendar confirms a booking, while the call may still be going — so body.result can be null; the meeting, the prospect and the call are always there."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "m1",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "meeting.booked",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000002",
+      "name": "Is meeting.booked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst p = body.prospect || {};\nconst m = body.meeting || {};\nreturn [{\n  json: {\n    event_id: body.event_id,\n    phone: p.phone_normalized || p.phone || '',\n    email: p.email || m.attendee_email || '',\n    name: p.full_name || m.attendee_name || '',\n    company: p.company || '',\n    start_ms: Date.parse(m.start_at),\n    end_ms: Date.parse(m.end_at),\n    start_at: m.start_at,\n    timezone: m.timezone,\n    provider: m.provider,\n    reference: m.reference,\n    notes: m.notes || '',\n    attempt_id: m.call_attempt_id,\n  },\n}];"
+      },
+      "id": "a5000005-0000-4000-8000-000000000003",
+      "name": "Flatten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [ ...($json.email ? [{ filters: [{ propertyName: 'email', operator: 'EQ', value: $json.email }] }] : []), { filters: [{ propertyName: 'phone', operator: 'CONTAINS_TOKEN', value: $json.phone.replace(/\\D/g, '').slice(-9) }] } ], properties: ['email', 'phone'], limit: 1 }) }}",
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000004",
+      "name": "HubSpot: find contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 200],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000005",
+      "name": "Contact exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/meetings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { hs_timestamp: String($('Flatten').first().json.start_ms), hs_meeting_title: `AI-booked meeting with ${$('Flatten').first().json.name}`, hs_meeting_body: `Booked by the calling agent on call ${$('Flatten').first().json.attempt_id} (${$('Flatten').first().json.provider}${$('Flatten').first().json.reference ? ' ' + $('Flatten').first().json.reference : ''}). ${$('Flatten').first().json.notes}`, hs_meeting_start_time: String($('Flatten').first().json.start_ms), hs_meeting_end_time: String($('Flatten').first().json.end_ms), hs_meeting_outcome: 'SCHEDULED' }, associations: [{ to: { id: $json.results[0].id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 200 }] }] }) }}",
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000006",
+      "name": "HubSpot: create meeting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 100],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "200 is HubSpot's meeting→contact association. With Cal.com as the calendar the reference is Cal.com's booking uid, so the two records can be tied together."
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $('Contact exists?').first().json.results[0].id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { ai_meeting_at: String($('Flatten').first().json.start_ms), hs_lead_status: 'CONNECTED' } }) }}",
+        "options": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000007",
+      "name": "HubSpot: stamp contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 100],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "ai_meeting_at is one of the properties Phase 15's sync creates; remove it if you do not have it."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales"
+        },
+        "text": "=:warning: A meeting was booked for {{ $('Flatten').first().json.name }} ({{ $('Flatten').first().json.phone }}) at {{ $('Flatten').first().json.start_at }}, but no HubSpot contact matches. Create one and attach the meeting by hand. {{ $('Flatten').first().json.event_id }}",
+        "otherOptions": {}
+      },
+      "id": "a5000005-0000-4000-8000-000000000008",
+      "name": "Slack: no contact",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1100, 340],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE-ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "a5000005-0000-4000-8000-000000000009",
+      "name": "Not a booking",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [440, 460]
+    }
+  ],
+  "connections": {
+    "Webhook: meeting.booked": {
+      "main": [[{ "node": "Is meeting.booked?", "type": "main", "index": 0 }]]
+    },
+    "Is meeting.booked?": {
+      "main": [
+        [{ "node": "Flatten", "type": "main", "index": 0 }],
+        [{ "node": "Not a booking", "type": "main", "index": 0 }]
+      ]
+    },
+    "Flatten": {
+      "main": [[{ "node": "HubSpot: find contact", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: find contact": {
+      "main": [[{ "node": "Contact exists?", "type": "main", "index": 0 }]]
+    },
+    "Contact exists?": {
+      "main": [
+        [{ "node": "HubSpot: create meeting", "type": "main", "index": 0 }],
+        [{ "node": "Slack: no contact", "type": "main", "index": 0 }]
+      ]
+    },
+    "HubSpot: create meeting": {
+      "main": [[{ "node": "HubSpot: stamp contact", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

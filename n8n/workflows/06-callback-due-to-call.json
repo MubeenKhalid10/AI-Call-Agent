@@ -1,0 +1,264 @@
+{
+  "name": "AIVA 06 — callback due (CRM task) → call",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "a6000006-0000-4000-8000-000000000001",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "The agent's OWN callbacks — the ones a prospect asked for on a call, or that were scheduled through POST /callbacks — are placed by `uv run campaign.py run` without any help. This workflow is for callbacks that live somewhere else: here, HubSpot CALL tasks that have fallen due. Any source works (a sheet, Airtable, a CRM): the only thing the agent needs is POST /calls."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "apiBase",
+              "value": "http://127.0.0.1:7890/api/v1",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "campaignName",
+              "value": "Callbacks",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "notes": "campaignName must exist and be ACTIVE (create it once: POST /campaigns, POST /campaigns/{id}/start). A prospect not yet in it is added on the way."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/tasks/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [ { propertyName: 'hs_task_status', operator: 'EQ', value: 'NOT_STARTED' }, { propertyName: 'hs_task_type', operator: 'EQ', value: 'CALL' }, { propertyName: 'hs_timestamp', operator: 'LTE', value: String(Date.now()) } ] }], properties: ['hs_task_subject', 'hs_timestamp', 'hs_task_body'], limit: 20 }) }}",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000003",
+      "name": "HubSpot: due CALL tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per due task.\nconst results = $input.first().json.results || [];\nreturn results.map((task) => ({ json: { taskId: task.id, subject: (task.properties || {}).hs_task_subject || '', due: (task.properties || {}).hs_timestamp } }));"
+      },
+      "id": "a6000006-0000-4000-8000-000000000004",
+      "name": "One item per task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000005",
+      "name": "Loop over tasks",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/crm/v3/objects/tasks/{{ $json.taskId }}?associations=contacts&properties=hs_task_subject",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000006",
+      "name": "HubSpot: task's contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 400],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.associations.contacts.results[0].id }}?properties=phone,mobilephone,firstname,lastname,email,company",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000007",
+      "name": "HubSpot: contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 400],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "A task with no associated contact fails here and the loop moves on (set 'Continue on fail' in Settings if you want that explicit)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.apiBase }}/prospects",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ first_name: $json.properties.firstname || 'Unknown', last_name: $json.properties.lastname || 'Contact', phone: $json.properties.mobilephone || $json.properties.phone, email: $json.properties.email || undefined, company: $json.properties.company || undefined, hubspot_contact_id: $json.id }) }}",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000008",
+      "name": "POST /prospects (upsert)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "Idempotent by number: an existing prospect is returned (200), a new one created (201). hubspot_contact_id lands in custom_data."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.apiBase }}/calls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "=hubspot-task-{{ $('Loop over tasks').item.json.taskId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prospect_id: $json.prospect.id, campaign: $('Config').first().json.campaignName, note: 'HubSpot task ' + $('Loop over tasks').item.json.taskId + ': ' + $('Loop over tasks').item.json.subject }) }}",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000009",
+      "name": "POST /calls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "202 = queued. The scheduler (`uv run campaign.py run`) dials it on its next tick, ahead of the campaign's queue, under calling hours and concurrency. The Idempotency-Key is the task id, so a re-run of this workflow for the same task is answered from the stored response and queues nothing twice (one pending callback per prospect guards it as well)."
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/tasks/{{ $('Loop over tasks').item.json.taskId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { hs_task_status: 'IN_PROGRESS', hs_task_body: 'Queued for the AI calling agent (callback ' + $json.callback.id + '); the outcome arrives as a call.completed event.' } }) }}",
+        "options": {}
+      },
+      "id": "a6000006-0000-4000-8000-000000000010",
+      "name": "HubSpot: mark task in progress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 400],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE-ME",
+          "name": "HubSpot private app"
+        }
+      },
+      "notes": "IN_PROGRESS, not COMPLETED: the call has not happened yet. Workflow 03 (completed call → CRM) is where the outcome lands; close the task there if you want, using the note text to find it."
+    },
+    {
+      "parameters": {},
+      "id": "a6000006-0000-4000-8000-000000000011",
+      "name": "All tasks handled",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1100, 160]
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Config": {
+      "main": [[{ "node": "HubSpot: due CALL tasks", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: due CALL tasks": {
+      "main": [[{ "node": "One item per task", "type": "main", "index": 0 }]]
+    },
+    "One item per task": {
+      "main": [[{ "node": "Loop over tasks", "type": "main", "index": 0 }]]
+    },
+    "Loop over tasks": {
+      "main": [
+        [{ "node": "All tasks handled", "type": "main", "index": 0 }],
+        [{ "node": "HubSpot: task's contact", "type": "main", "index": 0 }]
+      ]
+    },
+    "HubSpot: task's contact": {
+      "main": [[{ "node": "HubSpot: contact", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: contact": {
+      "main": [[{ "node": "POST /prospects (upsert)", "type": "main", "index": 0 }]]
+    },
+    "POST /prospects (upsert)": {
+      "main": [[{ "node": "POST /calls", "type": "main", "index": 0 }]]
+    },
+    "POST /calls": {
+      "main": [[{ "node": "HubSpot: mark task in progress", "type": "main", "index": 0 }]]
+    },
+    "HubSpot: mark task in progress": {
+      "main": [[{ "node": "Loop over tasks", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

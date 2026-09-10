@@ -1,0 +1,117 @@
+{
+  "name": "AIVA 04 — qualified lead → notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aiva-lead-qualified",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a4000004-0000-4000-8000-000000000001",
+      "name": "Webhook: lead.qualified",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA webhook header"
+        }
+      },
+      "notes": "Point AUTOMATION_WEBHOOK_URL_LEAD_QUALIFIED at this node's Production URL — or send every event to one URL and let the IF below pick. lead.qualified fires once per call whose qualification_status is QUALIFIED, once the result has settled."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "q1",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "lead.qualified",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a4000004-0000-4000-8000-000000000002",
+      "name": "Is lead.qualified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst p = body.prospect || {};\nconst r = body.result || {};\nconst s = r.summary || {};\nconst who = [p.full_name, p.job_title, p.company].filter(Boolean).join(', ');\nconst lines = [\n  `:star: *Qualified lead* — ${who || 'unknown prospect'}`,\n  `Phone: ${p.phone_normalized || p.phone || '—'}${p.email ? ` · ${p.email}` : ''}`,\n  `Interest: ${r.interest_level} · Timeline: ${r.buying_timeline} · Role: ${r.decision_role}`,\n  `Next action: ${r.next_action}${r.meeting_start ? ` (meeting ${r.meeting_start})` : ''}${r.callback_scheduled_for ? ` (callback ${r.callback_scheduled_for})` : ''}`,\n  (r.pain_points || []).length ? `Pain points: ${r.pain_points.join('; ')}` : null,\n  s.what_happened ? `_${s.what_happened}_` : null,\n  s.next_step ? `Next step: ${s.next_step}` : null,\n  `Call ${r.call_attempt_id} · ${body.event_id}`,\n].filter(Boolean);\nreturn [{ json: { text: lines.join('\\n'), prospect: p, result: r } }];"
+      },
+      "id": "a4000004-0000-4000-8000-000000000003",
+      "name": "Compose message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "a4000004-0000-4000-8000-000000000004",
+      "name": "Slack: #sales",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [660, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE-ME",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Swap for Microsoft Teams, Gmail, SMS or a CRM task node; the composed text is on $json.text and the raw prospect / result are alongside it."
+    },
+    {
+      "parameters": {},
+      "id": "a4000004-0000-4000-8000-000000000005",
+      "name": "Not a qualified lead",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [440, 460]
+    }
+  ],
+  "connections": {
+    "Webhook: lead.qualified": {
+      "main": [[{ "node": "Is lead.qualified?", "type": "main", "index": 0 }]]
+    },
+    "Is lead.qualified?": {
+      "main": [
+        [{ "node": "Compose message", "type": "main", "index": 0 }],
+        [{ "node": "Not a qualified lead", "type": "main", "index": 0 }]
+      ]
+    },
+    "Compose message": {
+      "main": [[{ "node": "Slack: #sales", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,172 @@
+{
+  "name": "AIVA 01 — CSV lead intake → campaign",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000001-0000-4000-8000-000000000001",
+      "name": "Run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "apiBase",
+              "value": "http://127.0.0.1:7890/api/v1",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "campaignName",
+              "value": "Q1 Outreach",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "csvPath",
+              "value": "/data/prospects.csv",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "notes": "Edit these three values. apiBase is where `uv run automation.py` listens (use http://host.docker.internal:7890/api/v1 when n8n runs in Docker on the same machine). csvPath is a file n8n can read; swap this node and the next two for a Google Sheets, Airtable or HubSpot node if the leads live there."
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.csvPath }}",
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000003",
+      "name": "Read CSV",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000004",
+      "name": "CSV rows",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [660, 300],
+      "notes": "One item per row, with the file's own column names. The API maps them the way `campaign.py import` does: First Name / first_name / FirstName, Surname, Mobile, Phone… Unknown columns are kept in custom_data."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Every row in one request: the API's import is a single call that\n// creates what is new, recognises what is already known (by number),\n// rejects what is unusable, and adds them all to the campaign.\nconst rows = $input.all().map((item) => item.json);\nconst config = $('Config').first().json;\nreturn [{\n  json: {\n    rows,\n    campaign: config.campaignName,\n    create_campaign: true,\n    dry_run: false,\n  },\n}];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000005",
+      "name": "Import body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.apiBase }}/prospects/import",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'import-' + $('Config').first().json.campaignName + '-' + $now.toFormat('yyyyLLdd') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000006",
+      "name": "POST /prospects/import",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "Re-running is safe: the same rows create nothing new and add nobody twice. The Idempotency-Key makes a retry of this exact request return the stored answer. The answer carries created / duplicates / rejected (with the reason per row), prospect_ids, and the campaign."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.apiBase }}/campaigns/{{ $json.campaign.id }}/start",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000007",
+      "name": "POST /campaigns/{id}/start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE-ME",
+          "name": "AIVA API key"
+        }
+      },
+      "notes": "Makes the campaign ACTIVE (already ACTIVE answers changed: false). Nothing dials here: `uv run campaign.py run` — the scheduler — places the calls under calling hours, concurrency and pacing."
+    },
+    {
+      "parameters": {
+        "jsCode": "const imported = $('POST /prospects/import').first().json;\nconst campaign = $json.campaign;\nreturn [{\n  json: {\n    campaign: campaign.name,\n    status: campaign.status,\n    created: imported.created,\n    already_known: imported.duplicates,\n    rejected: imported.rejected_count,\n    rejected_rows: imported.rejected,\n    members: campaign.counts ? campaign.counts.total : null,\n    note: 'The scheduler (uv run campaign.py run) places the calls.',\n  },\n}];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000008",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    }
+  ],
+  "connections": {
+    "Run": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Config": {
+      "main": [[{ "node": "Read CSV", "type": "main", "index": 0 }]]
+    },
+    "Read CSV": {
+      "main": [[{ "node": "CSV rows", "type": "main", "index": 0 }]]
+    },
+    "CSV rows": {
+      "main": [[{ "node": "Import body", "type": "main", "index": 0 }]]
+    },
+    "Import body": {
+      "main": [[{ "node": "POST /prospects/import", "type": "main", "index": 0 }]]
+    },
+    "POST /prospects/import": {
+      "main": [[{ "node": "POST /campaigns/{id}/start", "type": "main", "index": 0 }]]
+    },
+    "POST /campaigns/{id}/start": {
+      "main": [[{ "node": "Summary", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
