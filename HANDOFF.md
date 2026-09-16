@@ -2,7 +2,15 @@
 
 **Written for whoever picks this up next, including a fresh Claude session with no memory of how it got here.** Read this before touching code. The section that will save you the most time is [Attempted Approaches That Failed](#attempted-approaches-that-failed) — several of the things below look obviously right and are not.
 
-- **Status:** Phase 26 complete (the UI/UX redesign of the unified application — **frontend only**: `server/web/index.html`, `server/web/styles.css` and `server/web/app.js` were rewritten as a small design system and twelve redesigned pages over the *same* routes and the *same* API calls; no backend, API, database, engine, pipeline, telephony or n8n file changed. Grouped sidebar (Main / AI / Insights / System) with a user area; one status vocabulary with one colour per meaning everywhere (a dot and a word, never colour alone); skeleton loading, empty states with a next action, friendly errors with an expandable technical detail; confirmations that say what will happen; a dashboard built around the questions a user asks; a five-step campaign wizard whose review offers *Save as draft* or *Create and start*; a campaign page built for live monitoring (progress bar with a legend, counters, only the valid controls, the Phase 25 event stream with a Live pill); contacts with server search, client sort, a detail dialog; CSV import as Upload → Validate → Confirm → Done with valid / invalid / already-known counts; call history with qualification and meeting filters; a call page with a summary strip, the sections the brief lists, a readable transcript and a collapsed Technical details panel; the live agent, knowledge base, analytics and settings pages reorganised for a person. Walked end to end in the installed Chrome through Playwright against a private `app.py` instance on 7901 with three test users: 69 steps, all passing, no console errors, no 5xx; see the Phase 26 section.)
+- **Status:** Phase 33 complete (2026-09-15): **visual redesign of the unified application — frontend only.** The Phase 26 page was functional but generic, and one reason was never visible in the source: the Google Fonts `<link>` in `index.html` was blocked by the application's own CSP (`style-src 'self'`, `font-src 'self'`), so every page rendered in Segoe UI. Inter is now bundled (`web/fonts/*.woff2`, served under `/static/`, allowed by `font-src 'self'`). `styles.css` was rewritten as a token system (indigo-violet primary `#5b4ef5`, cyan accent `#06b6d4`, one brand gradient, five status tones, light **and dark** themes — the system's choice by default, a topbar toggle remembered in `localStorage` `aiva.theme`), with a motion system (page fade-up, KPI count-up, sliding sidebar indicator, card hover lift, progress bars that morph from their previous width, modal scale-in/out, toast slide-in/out, live pulse rings; all off under `prefers-reduced-motion`). `index.html`: the shell (sidebar with gradient brand mark, a sliding `#nav-indicator`, the theme toggle, new icons). `app.js`: motion helpers (`animateIn`, `countUp`, `moveNavIndicator`, `morphHtml`, `applyTheme`), a split-screen login/register (`authShell`, a brand panel naming the product's real capabilities, password reveal), a dashboard hero with the greeting and engine state, KPI cards with icons, campaign **cards** (`campaignCard`) on the dashboard and the campaigns page instead of the table, an inline-SVG **donut** (`donut`) for call outcomes on the dashboard and analytics, a campaign-page hero (`.campaign-hero`, glowing while running), the AI ring and a pipeline diagram on the Live page, gradient dropzone icons, transcript turns with a gradient AI avatar. **No route, API call, write, permission check, poll or SSE subscription changed**; `tests/test_app.py` 136 checks pass; a 51-step Playwright walk over the real pages in the installed Chrome passes with no console errors; the embedded voice client is themed too (`src/client_theme.py`, `web/client-theme.css`, `tests/test_client_theme.py`; **restart `bot.py`**). See [Phase 33](#phase-33-this-session).
+- **Previous status:** Phase 29 complete (2026-09-14): **per-turn latency instrumentation, no optimisation.** The user-to-agent delay observed at 12–19 s needed a breakdown before anything is tuned. New `src/latency.py` (`LatencyTracker`, one per session, on the same observer list as `diagnostics.py`, `metrics.py` and `voice_quality.py`; turn numbering identical to `TurnMonitor`'s; every line under the existing loguru call context, the summary naming the trace id) timestamps every stage between the caller's speech ending and the bot's first audio: speech start/end (VAD stop when present, else the end-of-turn decision), first interim and final transcript, retrieval start/end (two hooks in `retrieval.py`, outcome word included), each LLM request's start / first token / end (a tool turn makes two), each tool by name from the function-call frames, TTS request and first chunk, first audio at the output transport, and the gaps in between. One human line per turn (`LATENCY | TURN 4 | STT final … | KB retrieval … | LLM TTFT … | LLM total … | tool … | TTS TTFA … | TOTAL end-of-user-speech -> first-audio …`), one `turn.breakdown` k=v line, a `LATENCY CALL SUMMARY` with the average of every stage and the p95/max of the total, and the same record in the call report under `latency.turns`. Handles the greeting and unprompted replies (own kinds, out of the averages), barge-in, an interruption before audio, errors, no-audio turns and text mode. Never logs text, arguments, results or secrets. `tests/test_latency.py` (26th check script, **97 checks**, injected clock, no wall-clock timing); every other script unchanged and passing. **Baseline from the real bot, text mode (`eval-runs/phase29_latency_interested_2`):** an unthrottled turn is KB 0.14 s + LLM TTFT 0.72 s (LLM total 1.05 s); a throttled one is KB 0.11 s + LLM TTFT **70.3 s** — two Groq free-tier retry waits of 36 s and 31 s inside it — so the 12–19 s the user sees is the provider's rate limit, not the pipeline. **This machine's `.env` selects ElevenLabs on line 138 and its key answers 401**, so an audio measurement here needs the scratch `TTS_PROVIDER=cartesia` wrapper described in the section; the live figures are there. See [Phase 29](#phase-29-this-session).
+- **Previous status:** Phase 28 complete (2026-09-14): **always-available campaign context.** The agent sometimes said it had no information about its own company when a prospect asked "can you share more details?": the question passed the retrieval gate, the vector search found nothing above the threshold, and the *nothing relevant found* block — the last thing before generation — told the model it knew nothing about the business, overriding the campaign brief further up. Fix, the smallest that holds: `CampaignBrief` gained `company_description` and `services` (from `SALES_COMPANY_DESCRIPTION` / `SALES_SERVICES`, or a campaign's own `configuration` keys of the same names, accepted by `PUT /campaigns/{id}/configuration`); the rendered WHY YOU ARE CALLING block now opens with *you are {agent}, an AI assistant calling on behalf of {company}*, the description, the services, the purpose of the call composed from the existing fields, and three rules (basics need no lookup; anything beyond them is the knowledge base or honestly unknown; off-topic gets a brief honest answer and a steer back); the playbook's knowledge section and both retrieval blocks in `src/prompts.py` name the campaign facts as an allowed source. **Isolation:** the company facts travel with the company name — a campaign whose `company_name` differs from the environment's inherits neither field. About 110 words on the system instruction; no pipeline, schema or retrieval change. Two playbook lines found by the live runs: the AI-question override asks for the name, and the DISCOVERY objective answers a direct "what do you do?" before its question. `tests/test_conversation.py` 324 → **358 checks**; `tests/test_app.py` +5; `evals/sales/company_overview.yaml` is new and **passed 5/5 on the real bot** (run 4, after the two lines). See [Phase 28](#phase-28-this-session).
+- **Previous status:** Phase 27 follow-up complete (2026-09-11): **the eval runs the Phase 26 write-up left for "when the budget resets", and the three things they found.** Nothing new was built. (1) `test_production` check 4 passes inside calling hours (12:28 local): the 2026-09-10 failure was the clock. (2) On the configured model (qwen3.8): `vague_answers` PASS; `not_interested` PASS (set_interest, the goodbye, end_call, silence after); the "where are you calling from?" turn of `unrelated_question` PASS twice (Rotterdam and Austin — the rerun the 2026-09-10 prompt line was waiting for); `price_objection` turns 1–2 PASS; `meeting` three of four turns (the booking refused by Cal.com on the fixture address, as predicted). Then qwen3.8's 200,000-token day ran out (197,441 used at 13:01) and the rest ran on `GROQ_MODEL=openai/gpt-oss-120b` with the judge on gpt-oss-20b: `send_information` PASS, `unrelated_question` PASS, audio `conversation` PASS, `interruption` PASS (three of three; PARTIAL in both runs yesterday), `barge_in` mechanics proven but the substitute model restarted its greeting instead of saying Paris, `unknown_question` judged FAIL on the same handbook-true reply yesterday's judge passed, `price_objection` on the substitute spent all 400 output tokens on reasoning and said nothing. (3) Three fixes, every one found by a run: the `record_objection` tool result for `SEND_INFORMATION` now says what the override said, because the override is gone from the context by the time the tool result is answered and qwen3.8 talked the caller out of the email; a `NOT_INTERESTED` objection filed on a turn where the detector heard a rejection is taken as the no (the `set_interest` path, the goodbye guidance, the conversation's hang-up) — qwen3.8 filed it that way and the call sat open after the goodbye; and the eval judge no longer loads `.env` into the harness process (with `-r 2`, attempt 2 was introducing the deployment's company — Failed §48) and takes `EVAL_JUDGE_MODEL` / `EVAL_JUDGE_MAX_TOKENS` so the judge can live on a model with its own per-minute budget. `tests/test_conversation.py` 314 → **324 checks**; the five other conversation-layer scripts unchanged and passing. See [Phase 27 follow-up](#phase-27-follow-up-this-session).
+- **Phase 27 follow-up verified:** 2026-09-11. `uv run validate.py`, 13:15 local: **25 scripts, 3,948 checks passed, 0 findings failed, 11 warnings, exit 0** — the first run on this machine with every automated finding green, `health.py tts` included, since `.env` now selects Cartesia once. `test_production` ran inside calling hours. The eval evidence is in the section; no call was placed.
+- **Status:** Phase 27, second part complete (2026-09-10): **role requests and admin approval on sign-up.** The Register page has a role choice (Viewer / Operator / Admin). A Viewer is active at once, as before. An Operator or Admin sign-up is a `pending` row (`dashboard_users.status`; `campaign.py init` adds the column in place) that **cannot sign in** — the login answers 403 *awaiting approval* only after the password matched, with no cookie — until an admin approves it under *Settings → Sign-up requests* (`GET /api/app/users/pending`, `POST /api/app/users/{id}/approve|reject`, behind the existing `manage` permission and the same-site check) as exactly the role asked for; rejection deletes the row so the name is free again. The role in the request body decides only which of the two statuses the row gets; `status` in the body is ignored. The login re-reads a registered user's row every time, so a decision made on another process is seen without a restart. `DASHBOARD_REGISTRATION_ROLE` was removed (it could have made an operator active at once). `tests/test_app.py` 101 → **136 checks** (the eleven scenarios the user listed, plus the cross-site and forged-payload cases); the five other affected scripts unchanged and passing; the eleven scenarios driven over HTTP on the real database and the approval card walked in Chrome. See [Phase 27, second part](#phase-27-second-part-this-session).
+- **Phase 27, first part:** **app-user registration moved from the terminal to the application.** The login page has a *Create one* link to a Register page (`#/register`: name, email, password, confirm) that posts to the new `POST /api/app/register`; a sign-up becomes a row of the new `dashboard_users` table (`campaign.py init` adds it; run once on an existing database) with the **same scrypt hash** as `DASHBOARD_USERS`, joins the **same `UserDirectory`** the dashboard's login reads, and signs in through the **unchanged Phase 18 login** by name or by email. The role is `DASHBOARD_REGISTRATION_ROLE` (viewer by default, operator allowed, admin refused at config time); `DASHBOARD_REGISTRATION_ENABLED=false` closes the page. `DASHBOARD_USERS` entries are untouched and always win. Verified: `tests/test_app.py` 68 → **101 checks**; the five other affected scripts unchanged and passing; the five requested scenarios driven over HTTP against a private `app.py` on 7901 over the **real PostgreSQL**, then walked in the installed Chrome through Playwright (11 of 12 steps; the 12th is Chrome's own "failed to load resource" console line for the expected 401 and 409 — not a script error). See [Phase 27](#phase-27-this-session). **Restart `app.py` to serve the new page**; a process started before this change has neither the route nor the script.
+- **Previous status:** Phase 26 complete (the UI/UX redesign of the unified application — **frontend only**: `server/web/index.html`, `server/web/styles.css` and `server/web/app.js` were rewritten as a small design system and twelve redesigned pages over the *same* routes and the *same* API calls; no backend, API, database, engine, pipeline, telephony or n8n file changed. Grouped sidebar (Main / AI / Insights / System) with a user area; one status vocabulary with one colour per meaning everywhere (a dot and a word, never colour alone); skeleton loading, empty states with a next action, friendly errors with an expandable technical detail; confirmations that say what will happen; a dashboard built around the questions a user asks; a five-step campaign wizard whose review offers *Save as draft* or *Create and start*; a campaign page built for live monitoring (progress bar with a legend, counters, only the valid controls, the Phase 25 event stream with a Live pill); contacts with server search, client sort, a detail dialog; CSV import as Upload → Validate → Confirm → Done with valid / invalid / already-known counts; call history with qualification and meeting filters; a call page with a summary strip, the sections the brief lists, a readable transcript and a collapsed Technical details panel; the live agent, knowledge base, analytics and settings pages reorganised for a person. Walked end to end in the installed Chrome through Playwright against a private `app.py` instance on 7901 with three test users: 69 steps, all passing, no console errors, no 5xx; see the Phase 26 section.)
+- **Phase 26, second part (2026-09-10, same day): the conversation requirements audit's fixes** — the model's reasoning can no longer reach the voice (Groq `reasoning_format: hidden` for reasoning models, `LLM_REASONING_FORMAT`, plus a new `src/spoken_text.py` stage between the LLM and the TTS that drops tagged reasoning, tool markup, special tokens and wordless sentences; `tests/test_spoken_text.py`, the 25th check script); the opening now says the agent is an AI assistant in its first sentence, whatever the compliance policy; an apology-first rule for people annoyed at being called; the SDK's silent rate-limit retries are logged; `evals/sales/introduction.yaml` is new, the judge criteria of three scenarios name what the knowledge base holds, `not_interested` asserts the goodbye and the hang-up, and every post-greeting expectation carries `within_ms`. **Text-mode evidence against the real model, 2026-09-10 (both runs):** introduction, wants_human, unknown_question, interested, existing_provider, angry, price_objection, do_not_call and callback PASS; audio: conversation and barge_in PASS with the recordings reviewed; meeting three of four turns (Cal.com needs an email an eval session lacks), vague_answers two of three, send_information honest but the objection unrecorded, interruption mechanics proven and restraint judged twice failed, not_interested's hang-up one of three (guidance sharpened, re-run blocked by the cap); earlier note: unrelated_question and price_objection answered correctly and were failed by the judge (a `continue` verdict; a price the judge could not see — criterion since fixed, not re-run); not_interested's goodbye-and-hang-up turn passed the judge once and its re-run died on Groq's daily token cap (200,000 tokens per day, reached at 15:46); meeting, do_not_call, callback, send_information, vague_answers and every audio scenario were **not run** — the cap. See the Phase 26 section.
 - **Phase 26 verified:** 2026-09-10. `uv run validate.py`: **24 scripts, 3,785 checks, 0 findings failed, 11 warnings** (the same posture as Phase 25; the TTS finding passed on this run). `tests/test_app.py` and `tests/test_engine.py` unchanged and passing; the browser walk is in the Phase 26 section. No call was placed.
 - **Previous status:** Phase 25 complete (automated outbound campaign execution: the scheduler runs **inside `app.py`** as `src/app/engine.py::CampaignEngine`, built by the new `src/campaigns/runtime.py::build_worker` that `campaign.py run` now uses too — starting a campaign dials it: the engine reserves each contact from the PostgreSQL queue under the Phase 21 advisory lock, places the call through the configured carrier with the contact's ids on the handshake, follows it, writes the outcome, moves to the next, and completes the campaign; per-campaign `configuration.max_concurrent_calls` enforced inside the reservation beside `MAX_CONCURRENT_CALLS`; an explicit retry route (`POST /campaigns/{id}/prospects/{pid}/retry`, a due callback ahead of the queue); a failed call always carries a reason; `CampaignStore.campaign_progress` (every counter in two statements) and `src/campaigns/progress.py`; `GET /api/app/engine`, `GET /api/app/campaigns/{id}/progress`, `GET /api/app/stream` (server-sent events, polled from the rows, only changes sent); the page's campaign strip and dashboard update live from the stream, with a Retry button and a per-campaign concurrency field; `WORKER_EMBEDDED` / `WORKER_SHUTDOWN_SECS`; `app.py --no-engine` and `--with-scheduler` (a child process instead); `/readyz` includes the engine; graceful shutdown (no new calls, a bounded wait, hand-over). **No schema change.** `tests/test_engine.py`, the 24th script (68 checks, all passing, the last section over a throwaway PostgreSQL schema). Live on this machine: a two-contact campaign created from the page with a CSV, started from the page, dialled by the engine without any other command — Ada (interested: pain point, decision maker, partially qualified, 139 s, 9 transcript turns) and, 17 ms after her call ended, Grace (not interested, 69 s) — and marked COMPLETED by the engine itself; the progress route and the event stream showed every step (connected → completed → next contact → 100%), the calls list and the call pages showed both records, and the rows were deleted afterwards.
 - **Phase 25 verified:** 2026-09-08. `uv run validate.py`: **24 scripts, 3,785 checks, every script exit 0; the one failed finding is health.py tts (the ElevenLabs credential, unchanged since Phase 23); 13 warnings, the same posture plus two stale scheduler_workers rows from earlier sessions**.
@@ -79,7 +87,14 @@ As of Phase 7 the agent does all of that, including booking the meeting: it phon
 | 23 | Production readiness and end-to-end validation: `tests/test_production.py` (the whole story over real code and a real PostgreSQL), `validate.py` (every automated check into one report; the controlled real-phone test behind `--dial --yes`), `PRODUCTION_READINESS.md` (not declared ready; fifteen manual items), four hardening fixes, no new features | Done (2026-09-08) |
 | 24 | Unified application and frontend: `app.py` (port 7900) serves a single-page application and mounts the existing dashboard and automation API on one origin with one login; pages for the dashboard, campaigns, a create-campaign wizard, contacts, CSV import with preview and confirm, calls and call detail, the live agent, the knowledge base, analytics and settings; `PUT /campaigns/{id}/configuration`; no schema change; the pipeline, scheduler, dialer and carrier untouched | Done (2026-09-08) |
 | 25 | Automated outbound campaign execution: the scheduler inside `app.py` (`CampaignEngine` over `runtime.build_worker`), per-campaign concurrency, an explicit retry route, a reason on every failed call, `campaign_progress`, `/api/app/engine`, `/api/app/campaigns/{id}/progress`, the `/api/app/stream` event stream, the live campaign page, bounded graceful shutdown; no schema change | Done (2026-09-08) |
-| 26 | Not yet specified by the user | Not started |
+| 26 | UI/UX redesign of the unified application (frontend only), then the conversation-requirements fixes (reasoning hidden from the voice, the AI disclosure) | Done (2026-09-10) |
+| 29 | Per-turn latency instrumentation: `src/latency.py` `LatencyTracker` on the worker's observers, two hooks in `retrieval.py`, one line per turn and a call summary (averages, p95), the record under `latency.turns` in the call report; baseline only, nothing optimised | Done (2026-09-14) |
+| 30 | TTS fallback: `src/tts_fallback.py` `TTSFallbackSwitcher` over Pipecat's `ServiceSwitcher`, Cartesia primary and ElevenLabs on standby, switching once per call on the primary's first provider failure, the failed sentence spoken once by the fallback only if the primary produced no audio; `TTS_FALLBACK_ENABLED` / `TTS_FALLBACK_PROVIDER`; `health.py tts_fallback`; nothing else in the pipeline changed | Done (2026-09-14) |
+| 31 | Prompt budget: the system instruction compacted (1,768 → 1,624 Qwen3 tokens on the test campaign, every rule kept), and the tool schemas advertised per stage over the existing state machine (1,043 tokens on every request → 0 on the opening, 595–815 while selling, 114–290 while closing) with every handler registered explicitly once, which Pipecat never prunes; `scripts/prompt_tokens.py` measures it; `tests/test_tool_advertising.py` drives the registry race directly | Done (2026-09-14) |
+| 32 | Tool round trips: every tool audited; the five recording tools (`record_discovery`, `set_interest`, `record_objection`, `move_to_stage`, `request_meeting`) end the turn without a second LLM request when the model already spoke in the same response as the call (Pipecat `run_llm=False`, decided per call from a `SpeechTally` fed by a `SpeechObserver`); the seven that act on the world or end the call stay synchronous; no write moved, nothing duplicated; `tests/test_tool_round_trips.py` counts the requests in a real pipeline | Done (2026-09-14) |
+| 33 | Visual redesign of the unified application, frontend only: Inter bundled locally (the Google Fonts link had been blocked by the CSP since Phase 26), a token design system with light and dark themes, a motion system, split-screen login, dashboard hero, campaign cards, an SVG donut, campaign and Live page heroes; no route, API contract, write or permission check changed; `test_app.py` 136 checks, a 51-step Playwright walk | Done (2026-09-15) |
+| 28 | Always-available campaign context: `company_description` and `services` on the brief, from `SALES_COMPANY_DESCRIPTION` / `SALES_SERVICES` or the campaign's `configuration`; the identity, purpose and three usage rules rendered into the system instruction; the knowledge blocks name the campaign facts as a source; the facts travel with the company name (isolation) | Done (2026-09-14) |
+| 27 | App-user registration in the frontend: the Register page, `POST /api/app/register`, the `dashboard_users` table, the same hash / directory / login; `DASHBOARD_REGISTRATION_ENABLED`. Second part: a role choice on sign-up; Operator and Admin requests pending until an admin approves them on Settings → Sign-up requests (`/api/app/users/…`) | Done (2026-09-10) |
 
 ---
 
@@ -167,7 +182,7 @@ uv run validate.py measure                 # Phase 23 — answer/success rate, l
 uv run validate.py live --to +92...        # Phase 23 — the controlled real-phone test; dials only with --dial --yes
 uv run app.py                              # Phase 24 — the unified application, http://127.0.0.1:7900/app/ (sign in with a DASHBOARD_USERS account)
 uv run app.py --with-scheduler             # Phase 24 — the same, plus `campaign.py run` as a child; dials ACTIVE campaigns
-uv run python tests/test_app.py            # 68 checks — Phase 24: serving, one login for every part, CSRF, roles, the whole flow over a fake carrier, knowledge, the boundary
+uv run python tests/test_app.py            # 136 checks — Phase 24: serving, one login for every part, CSRF, roles, the whole flow over a fake carrier, knowledge, the boundary; Phase 27: the Register page's route
 uv run python tests/test_engine.py         # 68 checks — Phase 25: the engine inside the application: automatic execution, pause/resume/stop, failures, concurrency, retry, crash + adoption, shutdown, the stream (SQL section needs PostgreSQL)
 uv run app.py                              # Phase 25 — the application AND the engine: a started campaign is dialled from this process (--no-engine to serve without dialling)
 
@@ -304,6 +319,1190 @@ representative, so both now test the same mechanisms — multi-turn memory,
 speakable output — with turns that belong in the call it is actually on, and
 what happens when a prospect genuinely goes off-topic is
 `sales/unrelated_question.yaml`.
+
+### Phase 33 (this session)
+
+**The brief:** a major, clearly visible visual transformation of the
+application — a premium SaaS look, one brand system, gradients, depth,
+motion, light and dark themes, a redesigned shell, dashboard, campaigns,
+calls, forms, tables, empty and loading states, responsive — while every
+route, API contract, write, permission check, poll and event stream stays
+exactly as it was. Inspect the rendered pages before and after; do not
+claim more than the screenshots show.
+
+**What the inspection found first.** Screenshots of every route (Playwright
+over the installed Chrome, 1440 px and 390 px) showed a competent but flat
+admin panel: one blue, white cards on grey, no gradients, no depth, no
+motion beyond a spinner, a plain centred login card, no dark mode — and
+Chrome's console explained part of it: *Loading the stylesheet
+'https://fonts.googleapis.com/…' violates the Content Security Policy
+directive "style-src 'self' 'unsafe-inline'"*. The Inter font Phase 26
+linked never loaded; every page had been rendering in Segoe UI. The CSP is
+right (`app_csp` in `src/app/server.py`) and was not touched; the font is
+now served from the application itself.
+
+**What was built — four things under `server/web/`, nothing else.**
+
+- `fonts/inter-latin.woff2`, `fonts/inter-latin-ext.woff2` — Inter variable
+  (400–800), the Google Fonts v20 latin subsets, declared with `@font-face`
+  at the top of `styles.css` and served by the existing `/static` mount.
+- `styles.css` (rewritten, ~640 lines) — semantic tokens (`--background`,
+  `--surface`, `--surface-elevated`, `--surface-muted`, `--foreground`,
+  `--foreground-muted`, `--border`, `--primary`, `--primary-hover`,
+  `--primary-soft`, `--accent`, `--accent-soft`, `--success`, `--warning`,
+  `--danger`, `--info`, plus `-soft` / `-line` / `-strong` variants) with the
+  Phase 26 names aliased so every older class keeps working; the dark theme
+  under `@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`
+  and `:root[data-theme="dark"]`; one gradient (`--gradient-brand`) and one
+  glow (`--glow-primary`) reused everywhere; radii 8 / 10 / 14 / 20, four
+  shadows; a motion block (one easing, three durations, the keyframes,
+  `.page-enter` staggering, `prefers-reduced-motion` zeroing every animation
+  and transition). New components: `.hero`, `.stat-icon`, `.campaign-card`,
+  `.campaign-hero`, `.donut`, `.auth*` (split screen, orbs, waveform),
+  `.nav-indicator`, `.pipeline`, `.ai-ring`, `.field.with-btn`, `.card.glow`
+  (gradient border), `.tabs` as a segmented control, the stepper with a
+  gradient active step, transcript turns with a gradient AI avatar, the
+  modal as a bottom sheet under 600 px.
+- `index.html` — the shell: gradient brand mark, `#nav-indicator` inside
+  `#nav`, `#theme-toggle` in the topbar, the rail toggle with a sidebar
+  glyph, new SVG symbols (sparkle, sun, moon, eye, eye-off, phone-out,
+  activity, target, chevron, layers, cpu, volume); the Google Fonts links
+  removed; `color-scheme` and `theme-color` meta.
+- `app.js` — a motion section after the helpers (`reducedMotion`,
+  `countUp` over `[data-count]`, `animateIn` on every non-quiet route,
+  `moveNavIndicator` on route / rail toggle / resize, `morphHtml` so the
+  campaign progress bars animate from their previous width on a stream
+  update, `applyTheme` + the toggle); `toast` fades out before removal;
+  `closeModal` fades the dialog and removes only that element (a new dialog
+  may open meanwhile); `stat` gains an icon by label and `data-count`;
+  `donut(rows)`; `hero()`; `head()` takes an `eyebrow`; `campaignCard`;
+  `authShell` / `passwordField` / `bindReveal` for the login and register
+  pages; the dashboard, campaigns list, campaign page header, Live page,
+  call transcript, analytics outcomes and the three dropzones use them. The
+  quiet 15 s refresh (`route(true)`) skips the entrance animation and the
+  count-up, so a live page never flashes.
+
+**What was verified (2026-09-15).** `node --check web/app.js`;
+`tests/test_app.py` **136 checks, all passing** (it asserts on `app.js`:
+the Register view, `href="#/register"`, the pending-users routes, every
+route, no `http(s)://` but the bot URL, no "start" inside `pageImport`);
+a Playwright walk in the installed Chrome (channel `chrome`, headless)
+against a private `app.py --port 7901 --no-engine --no-deliver` with
+`DASHBOARD_AUTH_DISABLED=true` and a second on 7902 with the login on —
+**51 checks, all passing, no console errors**: Inter loaded (no CSP block),
+indicator on the active item and moving with the route, page-enter class,
+theme toggle both ways and remembered, rail collapse / expand, hero + KPIs
++ donut, count-up reached its targets, card hover lift, campaign cards,
+status tab filter, campaign hero + progress + four tabs each rendering
+their form or table, wizard step 1 → 2 with the done marker,
+choose-contacts modal open and Escape-close, contact search, contact
+drawer open / close, the do-not-call confirm opened and **cancelled**,
+calls status filter, row click to the call page, transcript turns with the
+AI avatar, toast animation, reduced motion (animations 0.01 ms, counters
+final at once), mobile drawer open / close on navigation and no horizontal
+scroll on seven routes at 390 px, the split-screen login, password reveal,
+a wrong password's plain error, register rendering and validation. Before
+and after screenshots of every route at both widths and the dark set were
+reviewed. **Nothing was written**: no campaign started, no contact changed,
+no import confirmed. No call was placed.
+
+**The embedded voice client, second part (same day).** The Live AI Agent
+page frames the runner's prebuilt Pipecat playground from the bot's origin;
+it kept the vendor's grey look in both themes. The bundle cannot be
+configured from outside, but it is themed with CSS custom properties
+(`--color-*`, a `.dark` class on `<html>`, the `voice-ui-kit-theme`
+`localStorage` key) and its font stack already names Inter, which it never
+ships. New `src/client_theme.py` (`install_client_theme(app, web_dir)`,
+called from `bot.py` **before** `main()`, so its routes precede the
+runner's `/client` mount) serves three things from the bot's own origin:
+`/client/` and `/client/index.html` — the vendor's page with
+`web/client-theme.css` linked after the bundle's stylesheet and one script
+that applies `?theme=light|dark`, listens for a `postMessage` of type
+`aiva:theme`, writes the playground's own theme key so its toggle stays in
+step, renames "Pipecat Playground" to "Voice client" and tags it so the
+stylesheet drops the vendor's mark (a `::before` on the title — not an
+`<img>`, not a sibling); `/client/theme.css`; `/client/fonts/<file>` from `web/fonts/`
+(name allow-listed, traversal refused). The stylesheet remaps every
+playground token to the application's palette, light and dark, sets
+`--radius-base` and Inter. `app.js` frames `${bot}/client/?theme=<current>`
+and `applyTheme` posts the message to the frame, so the client follows the
+application's toggle without a reload. Nothing about the runner, the frame
+policy (`frame-src` unchanged) or the bot's pipeline changed; if the
+prebuilt package is missing, nothing is installed and the runner serves
+its own page. **Restart `bot.py` to serve the themed client**; a bot
+started before this change serves the vendor's page.
+
+Verified: `tests/test_client_theme.py` (the 30th check script, **44
+checks**: the patched page, the routes winning over a mount added
+afterwards, CSS and fonts served, traversal refused, a missing client
+installing nothing, the stylesheet's tokens equal to the application's,
+the application's side); listed in `validate.py`. In the installed Chrome
+against a private bot on 7863 and a private app on 7901 with `--bot-url
+http://127.0.0.1:7863`: the frame loads with `?theme=light`, renders on the
+application's white surface in Inter with the brand primary, the title is
+renamed and the mark hidden; the application's toggle turns the client
+dark (`rgb(17, 21, 42)`) and back without a reload; the client stores the
+theme in its own key; `/client/?theme=dark` alone honours it.
+
+**Known limits.** The theme toggle is applied by `app.js`, so a person who
+chose the opposite of their system theme sees one frame of the system
+theme before the script runs (an inline script would fix it and the CSP
+forbids inline scripts — deliberately). The voice client's own theme
+button still exists inside the frame; using it changes the frame alone,
+until the application's toggle is used again. The donut uses the real
+`outcomes` rows only; nothing is invented.
+
+### Phase 32 (this session)
+
+**The brief:** a tool call is `LLM request → call → result → second LLM
+request → spoken reply`, and the measurement showed the second request is
+where a tool turn's latency goes. Audit every tool; classify each as needing
+its result before the model may speak (synchronous) or only recording
+(may let the reply continue); remove the unnecessary round trips without
+duplicate writes, without exposing failures to the prospect, without
+changing external behaviour; measure; prove persistence and the blocking
+tools; run the suite.
+
+**The audit.** Every tool answers through `strict_tool` with a
+`ToolResult`, and Pipecat runs the LLM again after *every* result
+(`LLMAssistantAggregator._handle_function_call_result`: `run_llm` defaults
+to True). So before this phase every one of the twelve cost two requests.
+Confirmed in the Phase 29 run (`eval-runs/phase29_latency_interested_2`,
+turn 3): request at 14:14:09, `record_discovery` at 14:14:47, second
+request at 14:14:47, first speech at 14:15:20 — and **no speech at all in
+the response that made the call**. What each does:
+
+| Tool | Does | Result needed before speaking? | Class |
+|---|---|---|---|
+| `record_discovery` | writes `QualificationRecord` fields in memory; may move GREETING → DISCOVERY | no ("recorded") | releasing |
+| `set_interest` | writes the interest level in memory; NOT_INTERESTED moves the state | no, unless it stopped the selling (the result then says to close and call `end_call`) | releasing, except `stopped_selling` |
+| `record_objection` | adds an objection in memory; moves to OBJECTION_HANDLING; a heard rejection becomes the no | no, unless it stopped the selling | releasing, except `stopped_selling` |
+| `move_to_stage` | state machine only | no when moved; a refused move carries a reason the model must follow | releasing on success |
+| `request_meeting` | intent in memory | no | releasing on success |
+| `search_knowledge_base` | embedding + pgvector | yes: the answer is in the result | blocking |
+| `check_calendar_availability` | calendar provider | yes: the times | blocking |
+| `book_meeting` | calendar provider + store | yes: booked or not | blocking |
+| `schedule_callback` | store | yes: scheduled or not | blocking |
+| `mark_do_not_call` | the sink's backend write, now, idempotent, failures caught | yes: stored or not decides the wording; compliance | blocking |
+| `transfer_to_human` | carrier call control | yes | blocking |
+| `end_call` | `EndWorkerFrame` after its result | yes (call control) | blocking |
+
+There is no "background persistence" to move for the five recording
+tools: they do no I/O at all. The record is written to PostgreSQL once, at
+the end of the call, by the sink (`finish → on_call_finished`), exactly as
+before; the only cost of a recording call was the second request. That is
+what this phase removes, when it is safe.
+
+**The mechanism.** Pipecat's `FunctionCallResultProperties(run_llm=False)`
+tells the aggregator not to run the LLM after a result. Skipping the request
+is only right when the caller has already heard the reply, so the wrapper
+decides per call, with three conditions, all read from a `SpeechTally`
+(`src/spoken_text.py`) fed by a `SpeechObserver` on the worker's observer
+list: **the model spoke in the same response as the call** (text the
+spoken-text filter let through — hidden reasoning does not count); **that
+response made exactly one tool call** (with two, one result's `run_llm=False`
+would suppress the run the other needs); and **the result needs no
+follow-up** (`tools.TURN_RELEASING` with the per-tool predicates: a
+`stopped_selling` no, a refused move and every failure keep the request, so
+the goodbye, `end_call` and the failure guidance still happen). Anything
+else — the model called without speaking, no tally attached, the response
+not ended within 2 s, the tally raising — delivers the result exactly as
+before and the second request runs. The system instruction now says the
+reply may go in the same response as a recording call; whether the model
+does is what decides the saving, and the fallback is the old behaviour.
+
+**Why an observer, not a hook in the filter.** The first cut had the
+filter feed the tally from its own processing, and the pipeline check
+showed the handler running *before the filter had processed the response's
+start frame* — the handler is a task Pipecat creates as the response ends,
+the filter is a queue hop behind. Observers are called synchronously inside
+each `push_frame`, so the LLM's start frame numbers the response the moment
+it is pushed, `FunctionCallsStartedFrame` counts the calls, and the filter's
+end frame marks the response ended after every word of it went through. The
+handler reads its response number (`current_response`), waits for that
+number to end at the filter, then reads whether it spoke.
+
+**What changed:** `src/spoken_text.py` (`SpeechTally`, `SpeechObserver`;
+the filter itself unchanged), `src/conversation/toolkit.py` (`strict_tool`
+takes `release` and `speech`; `_turn_properties`; `RESPONSE_END_WAIT_SECS`),
+`src/conversation/tools.py` (`TURN_RELEASING`, `RESULT_BLOCKING`, the
+predicates), `src/conversation/conversation.py` (`speech` attribute),
+`src/conversation/playbook.py` (one clause in the tool section), `bot.py`
+(one tally per session, the filter kept as `spoken_text`, the observer),
+`validate.py`, `tests/test_tool_round_trips.py` (new).
+
+**Measured, in requests.** `tests/test_tool_round_trips.py` runs a scripted
+LLM service in a real pipeline with the real aggregators, the real filter,
+the real observer and the real handlers: a recording call the model spoke
+with is **one** request (the same turn without the tally: two, the
+"before"); a recording call made without speaking: two; a calendar call:
+two even though the model spoke; two calls in one response: two; a no: at
+least two (the goodbye and `end_call` follow). Expected wall-clock impact
+per recording turn where the model complies: the whole second request —
+LLM TTFT plus generation, 0.7–1.1 s unthrottled in the Phase 29 baseline,
+20–70 s when Groq throttles — minus nothing, since the tool itself takes
+0 ms. Not measured live: the Groq budget and a working TTS are both
+needed, and whether qwen puts the reply in the same response as the call is
+an eval question (`evals/sales/*.yaml`).
+
+**Also seen, left alone.** `end_call`'s own result re-runs the LLM once more
+(a third request on a closing turn) whose reply is cut off by the
+`EndWorkerFrame` queued behind the result; existing behaviour, not changed
+here because that request is where the goodbye comes from when the model
+called `end_call` without saying it.
+
+### Phase 31 (this session)
+
+**The brief:** the 2026-09-11 measurement put ~44% of every LLM request in
+the system prompt and ~35% in the twelve tool schemas. Audit the prompt for
+duplicates and verbosity, compact it without changing behaviour, advertise
+only the tools each stage can use — using the existing state machine, not a
+new one, deleting nothing — measure before and after, prove every tool
+still runs when it is needed, and touch nothing in n8n, PostgreSQL or the
+campaign engine. No latency claim without a measurement.
+
+**Measured, Qwen3 tokenizer (`scripts/prompt_tokens.py`, new; Groq's own
+count runs ~8% higher):**
+
+| | Before | After |
+|---|---|---|
+| System instruction, test campaign (Northwind, every capability) | 1,768 | 1,624 |
+| System instruction, the campaign in `.env` | 1,902 | 1,758 |
+| Tool schemas, opening request (before the prospect speaks) | 1,043 (12) | **0** |
+| Tool schemas, GREETING (their first reply) | 1,043 (12) | 595 (6) |
+| Tool schemas, DISCOVERY / QUALIFICATION / VALUE / OBJECTION | 1,043 (12) | 653 (7) |
+| Tool schemas, MEETING_REQUEST | 1,043 (12) | 815 (9) |
+| Tool schemas, CALLBACK / NOT_INTERESTED / DO_NOT_CALL / ENDING | 1,043 (12) | 290 / 205 / 114 / 114 |
+| Fixed part of a selling request (system + tools + guidance) | 3,013–3,091 | 2,421–2,719 |
+| Estimated total, selling request (+400 history and tool results) | 3,413–3,491 | 2,821–3,119 |
+| Estimated total, opening / closing requests | 3,413 / 3,274–3,333 | 2,026 / 2,201–2,423 |
+
+Tool schemas go from ~35% of a selling request to ~22% (DISCOVERY: 653 of
+2,927), and from 35% to 0% on the opening and 5–12% on the closing stages.
+Latency was not measured and is not claimed.
+
+**The audit (Part 1).** The instruction is assembled by
+`playbook.build_system_instruction` from eleven sections. What repeated:
+the four conduct bullets on objections, a no, a do-not-call and a callback
+are each restated at the moment they apply by a stage objective, an
+override block and a tool result's guidance; the honesty section's "never
+say booked unless success true" was also the tool section's footer; the
+knowledge section restated the campaign block's three Phase 28 rules and
+the `KNOWLEDGE_BLOCK_FOOTER` restates it again per turn (deliberately,
+Phase 3); the interruption section said "drop what you were saying" twice;
+the tool section named each tool and its condition, which the schema
+descriptions and the per-turn `_DISCOVERY_TOOL_LINE` / `_MEETING_TOOL_LINE`
+say again. Campaign information appears once (the campaign block) and was
+left exactly as it was: it is the campaign context the checks pin sentence
+by sentence, and a campaign's own configuration overlays it per field. The
+knowledge base already holds the detail; nothing in the prompt belonged
+there. What is repeated every turn is the stage block (202–280 tokens),
+whose two tool lines exist because of failures measured in Phase 6 and 7
+(§16, §21) — left alone.
+
+**Part 2, the compaction.** Every fixed section was rewritten shorter with
+each rule stated once, in the words the checks pin: identity, conduct,
+voice (7 bullets → 5), honesty (the two "never invent" bullets merged; the
+failed-tool sentence kept here and dropped from the tool footer),
+knowledge (4 bullets → 3), interruptions (3 → 2), the tool lines, and the
+prospect block's closing rule. Nothing about safety, disclosure, opt-out,
+fabrication, tool truthfulness, qualification, objections, booking,
+transfer, ending or interruptions was removed. `test_conversation.py`'s
+eighteen instruction needles and `test_actions.py`'s capability needles
+all still hold (one draft mentioned "a knowledge base block" in the
+honesty section, which the no-knowledge-base check caught; reworded).
+The result is modest — 144 tokens, 8% — because the campaign block
+(240–383 tokens) and the per-turn guidance are pinned by design, and the
+rest was already cut by half in Phase 7.
+
+**Part 3, per-stage tools — and why it is safe now.** Phases 7 and 11
+rejected this because Pipecat prunes a tool's handler when a later context
+stops advertising it (`LLMService._sync_registered_tool_handlers`, run on
+every `LLMContextFrame`). The installed 1.8.1 source says exactly which
+handlers it prunes: *auto-registered* ones — those it registered itself
+from a handler-carrying schema. "Explicit registrations
+(`register_function`), the catch-all handler, and built-in tools are never
+pruned." So:
+
+- `bot.py` registers every tool's handler once, explicitly:
+  `llm.register_function(schema.name, schema.handler)` for each of
+  `conversation.tools()`. The context is built from
+  `conversation.advertised_tools()` — **handler-less copies** of the
+  schemas for the current stage (`FunctionSchema` without `handler`), so
+  advertising a subset registers nothing and withdrawing one unregisters
+  nothing. A tool the model calls while it is not advertised still has its
+  handler (checked).
+- `tools.advertised_tool_names(state, record, capabilities, spoken,
+  slots_offered, signals)` is the table, keyed on the existing
+  `ConversationState`, `QualificationRecord`, `Capabilities` and the
+  detectors' signals — the same conditions the stage block already uses to
+  name a tool. Before the prospect has spoken: nothing. Every selling stage:
+  `record_discovery`, `record_objection`, `set_interest`, `mark_do_not_call`
+  (a pain point, push-back, a no or a do-not-call can come at any point —
+  Phase 6's reason for one tool set, kept); `move_to_stage` past the
+  greeting; `search_knowledge_base` with a knowledge base;
+  `check_calendar_availability` with a calendar (a day is named in any
+  stage, §21), `book_meeting` once times were offered or in
+  MEETING_REQUEST; `request_meeting` without a calendar; `schedule_callback`
+  when a callback or a time was just heard (when the override that names
+  it fires) or a callback intent is recorded; `end_call` once a meeting is
+  booked or in MEETING_REQUEST; `transfer_to_human` once they have asked
+  for a person (`record.human_requested`) on a transferable call. CALLBACK:
+  `schedule_callback`, `set_interest`, `mark_do_not_call`, `end_call`.
+  NOT_INTERESTED: `set_interest`, `mark_do_not_call`, `end_call`. DO_NOT_CALL:
+  `mark_do_not_call`, `end_call`. ENDING: `end_call`, `mark_do_not_call`.
+- Two refresh points, because two kinds of request exist. The director
+  sets the stage's set on the context (`context.set_tools`) and puts the
+  same on its copy, after the detectors have run — so a do-not-call heard
+  in the turn narrows the very request that answers it. The request that
+  answers a *tool result* is built from the context itself (the assistant
+  aggregator pushes it upstream, past the director), so `toolkit.strict_tool`
+  now takes `advertise=` and sets the fresh set on `params.context` after
+  the tool ran and before its result is delivered: `set_interest` moves the
+  call to NOT_INTERESTED, and the request that answers it advertises
+  `end_call`, as the result's guidance tells the model to call it "in this
+  same turn".
+- `SalesConversation.advertised_tools()` caches the handler-less copies once
+  per call. `tools()` is unchanged and still hands every handler-carrying
+  schema to whoever registers them. The pipeline list in `bot.py` is
+  unchanged.
+
+**Tests.** `tests/test_tool_advertising.py`, 28th check script: the table
+per stage and capability; the conversation driven as the pipeline drives it
+(discovery, an objection, a named day, `check_calendar_availability` then
+`book_meeting` from a stage that advertises them, a clear no then
+`end_call` advertised on the answering request and executing with the
+`EndWorkerFrame`, a callback heard then scheduled, a person asked for then
+`transfer_to_human`, a do-not-call narrowing to two, and a tool called while
+not advertised still running); **Pipecat's registry driven directly** on a
+real `GroqLLMService`: twelve explicit registrations survive a context
+advertising six, none, and an empty list, while (the contrast) twelve
+auto-registered handlers lose nine when a later context advertises three;
+the director's copy and context; the compacted instruction's rules,
+campaign context, no cross-campaign leakage, and size; the wiring by
+source, and that `src/campaigns`, `src/automation`, `src/crm` and `src/app`
+do not mention it. `validate.py` lists it. Every other script re-run: see
+the status line.
+
+**Not done, and why.** The campaign block's three Phase 28 rules duplicate
+the knowledge section and could go (~90 tokens); the checks pin them
+verbatim as campaign context, so they stayed. `record_discovery`'s seven
+argument descriptions are the largest schema (180 tokens) and were left:
+they are the model's structured statement of what it heard, and Phase 7
+measured what shortening them further cost in missed records. Whether the
+model behaves identically with fewer tools in view is a question for the
+eval suites (`evals/sales/*.yaml` through `eval_env.py`), which need the
+Groq budget and were not run here.
+
+### Phase 30 (this session)
+
+**The brief:** Cartesia (sonic-3.5) is the intended primary TTS and ElevenLabs
+the fallback, used when Cartesia cannot synthesise — HTTP 402
+`quota_exceeded`, exhausted credits, a temporary provider failure, a
+timeout or connection failure — without rebuilding the pipeline, changing
+any other stage, or losing provider selection through `.env`. Preferred:
+start on Cartesia; if it fails before producing audio, switch to ElevenLabs
+for the rest of the call; never re-speak a sentence Cartesia already
+produced audio for; no duplicate or overlapping speech; switch once, never
+back; log provider, category, switch and timing, never keys.
+
+**What existed.** No runtime fallback. `make_tts` built one service at
+startup; `resilience.py` covers silence and disconnects only. A TTS
+`ErrorFrame` reached the supervisor, which ended the call
+(`dead_on_arrival`) if the agent had not yet spoken — which is exactly what
+happened on 2026-09-14 when Cartesia's websocket connect answered 402.
+
+**Can a TTS service be swapped inside a running pipeline?** No: a
+`FrameProcessor` is linked to its neighbours at construction and Pipecat
+has no relink. What Pipecat 1.8.1 has is
+`pipecat.pipeline.service_switcher.ServiceSwitcher` — a `ParallelPipeline`
+with one branch per service, each behind a pair of `FunctionFilter`s that
+only let frames into the *active* branch. Both services are constructed,
+set up and started with the pipeline (both websockets open at start;
+ElevenLabs keeps its idle socket alive with keepalives, and a connection
+spends no credits); a switch is a change of which filter is open. Its
+stock `ServiceSwitcherStrategyFailover` switches only when the failed
+service reports itself *unusable*, which Pipecat's `ErrorCategory` reserves
+for 400/401/403/404/422; **402 is `QUOTA` and not permanent**, and
+connectivity, timeouts and server errors are not either — so the stock
+strategy would not have helped. Two more facts shaped the design: the
+filters always pass `StartFrame`/`EndFrame`/`CancelFrame` to both branches
+but block every other system frame (an `InterruptionFrame`) for the
+inactive one; and each service aggregates tokens into sentences in its own
+buffer behind its own input queue, so flipping the filter mid-response
+would split a sentence between two aggregators.
+
+**What changed:**
+
+- `src/tts_fallback.py` (new) — `TTSFallbackSwitcher(ServiceSwitcher)` over
+  a `TTSFallbackStrategy(ServiceSwitcherStrategyManual)` that adds one
+  public call, `fail_over_to`. The switcher decides in its own `push_frame`
+  (the documented place a switcher answers for its services' errors): on
+  the first non-fatal error from the primary whose category is not
+  `APPLICATION`, while the fallback `is_usable`, it retires the primary with
+  `set_usable(False)` (public: no more work, no more reconnecting), re-speaks
+  through the fallback whatever the primary was asked for and produced no
+  audio for (`TTSSpeakFrame(text, append_to_context=False)`), absorbs the
+  error, and logs `tts.fallback.engaged`. **The flip waits for the response
+  boundary:** until the `LLMFullResponseEndFrame` comes out of the primary
+  (or a new response starts, or the caller interrupts) the primary stays
+  routed but retired — it keeps aggregating and keeps its place in the
+  transcript, and Pipecat still runs its bookkeeping for each sentence
+  before declining to synthesise — and every sentence it would have spoken
+  is handed to the fallback as a `TTSSpeakFrame`, in order. The sentences
+  are seen through a **text transformer** on the primary
+  (`TTSService.add_text_transformer`, awaited inline before synthesis; it
+  returns the text unchanged) rather than the `on_tts_request` event, because
+  Pipecat delivers events on separate tasks and the first run of the checks
+  showed an error overtaking the record and a half-heard sentence being
+  re-spoken. "Produced audio" is per response (Cartesia streams one context
+  per response, so a chunk cannot be attributed to a sentence): audio from
+  the primary clears everything remembered, so a response that has partly
+  played is never partly repeated. A failure with no response in flight
+  (the 402 at connect) flips at once. On an interruption during the drain
+  the frame is also queued to the inactive fallback (its filter would keep
+  it out) so the handed-over speech stops, then the flip happens. If the
+  fallback cannot take over (its key rejected, its own permanent failure)
+  the switcher reports `... cannot take over` as its own error, in the TTS
+  stage (its class name carries `TTS`), once per sentence nobody can say,
+  so the supervisor ends a silent call. State: `primary` → `draining` →
+  `fallback` | `failed`; `contains(processor)` walks the branches;
+  `summary()` / `describe()` for the record. All on the pipeline's asyncio
+  loop: no threads, no locks. Per call — the next call starts on the
+  primary.
+- `src/services.py` — `make_tts` builds the primary through
+  `_make_tts_service(config, provider, key)`; returns it alone unless
+  `TTS_FALLBACK_ENABLED`, in which case it returns the switcher holding it
+  and the fallback. `TTS_PROVIDER=elevenlabs` with the fallback off is
+  ElevenLabs directly, as before.
+- `src/config.py` — `tts_fallback_enabled` (`TTS_FALLBACK_ENABLED`, default
+  false), `tts_fallback_provider` (`TTS_FALLBACK_PROVIDER`, default
+  `elevenlabs`, a supported provider different from `TTS_PROVIDER`),
+  `tts_fallback_api_key` (the fallback provider's key, demanded only when
+  enabled). `describe()` prints `TTS=cartesia->elevenlabs`.
+- `src/reliability/supervisor.py` — `ignore_errors_from` predicate: an
+  `ErrorFrame` pushed from a processor inside the switcher is not a session
+  failure (checked before the frame-id de-duplication, so the same frame
+  pushed on by the switcher as its own still counts). `bot.py` passes
+  `tts.contains` when the TTS is a switcher, and logs `TTS FALLBACK |
+  <describe>` at teardown. Nothing else in `bot.py` changed: the pipeline
+  list still says `tts`.
+- `src/reliability/health.py` + `health.py` — `tts_fallback` component: the
+  same credential-only probe as `tts` (`/v1/user` for ElevenLabs,
+  `/voices` for Cartesia) on the fallback provider; `SKIPPED` when off. It
+  synthesises nothing, so a health check spends no fallback credits.
+- `.env.example` — the two settings and what they do. `validate.py` —
+  `test_tts_fallback` in `SCRIPTS`.
+
+**Tests.** `tests/test_tts_fallback.py`, 27th check script, **74 checks**,
+no keys, no network: the real switcher in a real pipeline run by a real
+`PipelineWorker` (Pipecat's `run_test`), holding two scripted `TTSService`
+fakes whose audio bytes name the service and the sentence. Cartesia
+healthy → only Cartesia, fallback never asked; HTTP 402 before audio → the
+failed sentence and every later one from the fallback, in order, once
+each, the 402 absorbed, category `quota`, flip at the response end; partial
+audio then a connection reset → the half sentence heard once, nothing
+repeated, the rest from the fallback; the 402 at start (today's case) →
+greeting and first response from the fallback, flip at once; a fixed
+utterance failing; an application error → no switch, error travels on;
+the fallback's key rejected at start → no switch, the primary's error
+escapes as before; the fallback failing after taking over → its error
+escapes, no switch back; the fallback unusable during the drain → `failed`,
+the switcher's own errors; an interruption during the drain → flip, the
+cut-off half sentence never spoken, the next response from the fallback
+once; the supervisor with `ignore_errors_from`; a bearer token in the
+provider's error redacted in the switch line; config (off by default,
+explicit ElevenLabs direct, same-provider and missing-key refused, missing
+voice refused at build); the health component; the wiring by source.
+
+**Live evidence.** The real `CartesiaTTSService` and `ElevenLabsTTSService`
+built by `make_tts` inside the real switcher, with the machine's keys, in a
+two-processor pipeline under a real `PipelineWorker`, one
+`TTSSpeakFrame("Hello, this is a fallback test.")`, then the bot's cancel
+teardown: Cartesia's websocket connect answered **402 at setup**, the
+switcher logged `tts.fallback.engaged category=quota` and
+`tts.fallback.active reason=no response in flight` (1.2 s after
+construction), and **ElevenLabs spoke the sentence — 2 audio frames,
+55,670 bytes** — identical to the plain `TTS_PROVIDER=elevenlabs` control
+run; teardown took 0.0 s in both. So the switch works end to end with the
+real services, and **the ElevenLabs key works for synthesis**: the
+`health.py tts` "credentials rejected (HTTP 401)" comes from the `/v1/user`
+probe, which this (restricted) key is not permitted to read — a false
+negative that Phases 23–29 took at face value. Every credit-free GET
+(`/v1/user`, `/v1/user/subscription`, `/v1/models`, `/v1/voices`) answers
+401 *missing the permission …* for this key, so no request that costs
+nothing can confirm it; `_probe_tts` now reads that body and reports the
+key **DEGRADED: recognised but restricted** rather than rejected, and says
+that only synthesis can confirm it. A key that is actually invalid still
+reads *credentials rejected*. Cost of the evidence: two
+sentences, about 60 ElevenLabs characters; nothing on Cartesia (it never
+connected). Under Pipecat's own `run_test` harness the same real services
+(plain or switched) stall at the `EndFrame` teardown — with the switcher
+and without it — which the bot's cancel path does not; noted, not chased.
+What a real *call* still has to confirm: the flip timing with Cartesia's
+real 3 s `stop_frame_timeout_s` when it fails *mid-call* (a retired
+Cartesia's response end emerges 3 s after its last sentence; a new
+response or an interruption flips sooner), the transcript ordering across
+the switch, and how the handed-over `TTSSpeakFrame`s sound through
+ElevenLabs — all of which need a Cartesia account with credits.
+
+**How to turn it on** (`.env`): `TTS_PROVIDER=cartesia`,
+`TTS_FALLBACK_ENABLED=true`, `TTS_FALLBACK_PROVIDER=elevenlabs`, with
+`ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` set; then `uv run health.py
+tts tts_fallback`. As of 2026-09-14 19:06 the machine's `.env` selects
+`TTS_PROVIDER=elevenlabs` again with the fallback off, which uses
+ElevenLabs directly; that line was edited by hand after this session set
+it to `cartesia`, so it was left alone. Until the Cartesia account has
+credits, `TTS_PROVIDER=elevenlabs` is the setting that speaks; with
+credits, the three lines above give Cartesia first and ElevenLabs behind
+it.
+
+### Phase 29 (this session)
+
+**The brief:** the observed user-to-agent delay is 12–19 s. Before anything
+is optimised, instrument the loop end to end — user speech end, STT
+interim/final, retrieval, LLM request / first token / completion, each
+tool, TTS request / first audio, first audio played, the total — correlated
+with the existing ids, working through RAG, tools, barge-in and errors,
+never logging secrets, with a per-turn line and a per-call summary, tests
+that do not depend on wall-clock timing, and the command for a real
+measurement. No provider, model, prompt or tool change.
+
+**The stages, as the pipeline actually has them.** Between the caller's
+speech ending and the first audio:
+
+1. Deepgram Flux decides the end of turn and delivers the final transcript
+   in the same message (`UserStoppedSpeakingFrame` + `TranscriptionFrame`;
+   no `VADUserStoppedSpeakingFrame` on this path — the transport has no
+   VAD, `turns.py` puts it on the context strategies).
+2. The user aggregator closes the turn and pushes `LLMContextFrame`.
+3. `KnowledgeRetriever._augment` (embedding + pgvector, or the gate skips).
+4. `ConversationDirector` appends the stage block (a copy; microseconds).
+5. `GroqLLMService`: `LLMFullResponseStartFrame` is pushed *before* the HTTP
+   request (`base_llm.process_frame` → `_process_context`), so it is the
+   request start; `LLMTextFrame` is the first token; `LLMFullResponseEndFrame`
+   the end. A tool turn: request → `FunctionCallInProgressFrame` → the handler
+   → `FunctionCallResultFrame` → a second request. The SDK's rate-limit retry
+   (`services.py` warns *the SDK is waiting to retry*) sits inside TTFT.
+6. `SpokenTextFilter`, then `TTSStartedFrame` per sentence; the first
+   `TTSAudioRawFrame` is the first chunk.
+7. The output transport's `BotStartedSpeakingFrame`: audio reaching the caller.
+
+**Re-verified 2026-09-14 (later session, same brief).** The brief was
+issued again against this tree; nothing was rebuilt. Added the one figure
+the record lacked, `user_speech_ms` (speech start to the end-of-speech
+anchor, in `to_dict` and the `turn.breakdown` line) with its check, re-ran
+all 26 check scripts, and confirmed `health.py tts` still answers 401 on
+the ElevenLabs key `.env` line 138 selects — so the audio measurement is
+still blocked on a TTS key, and the text-mode baseline below stands.
+
+**TTS provider investigation, same evening.** `health.py` and `bot.py`
+(every transport: eval, smallwebrtc, the carriers) read one `Config.load()`
+and one `make_tts`, so both were on ElevenLabs for the same reason: `.env`
+line 138 `TTS_PROVIDER=elevenlabs`, a hand-added line overriding the
+`cartesia` default. The intended provider is Cartesia, so that line now
+reads `TTS_PROVIDER=cartesia` (the ElevenLabs lines 131–133 stay; one edit
+switches back). `health.py tts` is OK — but it probes `/voices` (key
+validity) and synthesises nothing, and a scratch `/tts/bytes` request
+(sonic-3.5, the default voice) answered **402 `quota_exceeded`, "Model
+credits limit reached"**: the Cartesia account has no credits, which is
+the HTTP 402 the audio runs above hit. No provider can speak on this
+machine until the Cartesia subscription is upgraded or its credits reset;
+that is what the real latency measurement waits on.
+
+**What was there already.** `metrics.py` reports Pipecat's own
+`UserBotLatencyObserver` (silence-corrected total, earliest TTFB per service)
+and `voice_quality.py` says whether a turn got a response at all; neither
+says where a turn's time went, and `metrics.py` measures nothing in text
+mode (every eval log ends *no responses measured*). The retriever logged its
+own duration and `toolkit._log` each tool's, but as separate lines nothing
+tied to a turn.
+
+**What changed:**
+
+- `src/latency.py` (new) — `TurnLatency` (every timestamp, the derived
+  figures, `to_dict`, `describe`), `LLMRequestTiming`, `ToolTiming`,
+  `LatencyTracker` (frame hooks, two retrieval hooks, `note_user_turn_stopped`,
+  `summary`, `log_summary`) and `_TrackerObserver` (de-duplicated on
+  `frame.id` and the broadcast sibling, like `_MonitorObserver`). Turns open
+  on `UserStartedSpeakingFrame`, or on the transcript / the aggregator's
+  turn-stopped event when no speaking frames exist (text mode). A response
+  stage with no open caller turn opens a `greeting` (first) or `unprompted`
+  (later — idle nudges, noise resumes) turn, which never enters the averages.
+  A turn closes on the bot's audio stopping — attributed to the turn that had
+  first audio, not the current one, because a barge-in opens the next turn
+  before the previous audio stops — on the next turn opening, or at the
+  summary. `InterruptionFrame` marks a turn interrupted only while a response
+  is in flight (the bookkeeping interruption at the start of every turn is
+  ignored). `ErrorFrame` attaches by stage. Services' own TTFB from
+  `MetricsFrame` ride along as `*_ttfb_reported_ms`, a cross-check on the
+  frame-timed figure. Anchor: the VAD's stop when seen, else the end-of-turn
+  decision; `stt_final_ms` clamps at 0 (Flux's transcript is never later
+  than its end of turn); `total_ms` is anchor → `BotStartedSpeakingFrame`.
+  **`on_context`** (found by the first live run): the downstream
+  `LLMContextFrame` is the one signal every mode has. In text mode the
+  harness appends the caller's text and runs the LLM — no speaking frames,
+  no aggregator event — and without it a six-turn run was recorded as one
+  turn with nine requests. A context whose newest user message is the
+  application's own instruction (`is_injected_block`, the retriever's
+  rule) opens nothing; one continuing the same turn after a tool result
+  opens nothing; in audio mode the turn is already open, so it joins it.
+- `src/retrieval.py` — `self.latency = None`; `retrieval_started()` before
+  the gate, `_note_retrieval(outcome)` on every exit (`skipped`, `failed`,
+  `empty`, `nothing found`, `N passages`). Nothing else changed.
+- `bot.py` — one `LatencyTracker(log_each_turn=CONFIG.log_metrics)` per
+  session, set on the retriever, on the observer list, fed the user
+  aggregator's turn-stopped content (word count only), `log_summary()` after
+  `reporter.log_summary()`, and `latency={**reporter.summary(), "turns":
+  latency.summary()}` into `monitor.report` — the existing `latency.stages`
+  readers (`briefing._quality_summary`, the dashboard) see what they saw.
+- `validate.py` — `test_latency` in `SCRIPTS`. `README.md` — the lines and
+  what each figure means.
+
+**Tests.** `tests/test_latency.py`, 97 checks: a normal turn figure by
+figure on a hand-advanced clock; the Flux path (no VAD; transcript before
+the anchor → 0 ms); the real observer fed real frames four hops each plus a
+broadcast sibling (one turn, one first-audio); a tool turn (two requests,
+the tool by call id, TTFT spanning both, arguments never in the record); a
+barge-in mid-response, an interruption before any audio, a service error, a
+no-audio turn flushed at the summary, an interruption with nothing in
+flight; the greeting and an idle nudge as their own kinds with the caller's
+first turn numbered 2 like the monitor's; text mode; the retrieval hook
+through the real `KnowledgeRetriever` over `test_knowledge`'s stub store
+(hit, miss, gated, broken, empty, and a retriever with no tracker); the
+summary's averages and p95 from fixed numbers, JSON shape, no transcript; the
+logged lines' shape; a bearer token in an error redacted by `event()`; the
+wiring in `bot.py` and `retrieval.py` by source; the context frame through
+the observer (an instruction context opens no turn, the aggregator's,
+the retriever's and the director's copies are one turn, the continuation
+after a tool result stays on it, the next caller message opens the next,
+an upstream context frame is ignored, in audio mode it joins the open
+turn). No check reads the wall clock.
+
+**Live evidence (2026-09-14).** Every audio run died two seconds in:
+`.env` line 138 selects ElevenLabs (key 401) and, through a scratch
+wrapper that sets `TTS_PROVIDER=cartesia` after `.env` loads, Cartesia
+answered HTTP 402 — the supervisor's `dead_on_arrival` ends the session,
+and the tracker's summary line (`0 response turn(s) … trace=…`) printed
+cleanly on the way out. So no first-audio figure exists on this machine
+until a TTS key works. Text mode, `evals/sales/interested.yaml` through
+`eval_env.py` (`eval-runs/phase29_latency_interested_2`, the harness was
+killed by the OS for memory after turn 4, the bot's lines are complete
+to there):
+
+```
+LATENCY | TURN 1 (greeting) | STT final n/a | KB retrieval n/a | LLM TTFT 1.66s | LLM total 2.02s | tool none | TTS TTFA n/a | TOTAL … n/a | no_audio
+LATENCY | TURN 2 | STT final n/a | KB retrieval 0.14s (nothing found) | LLM TTFT 0.72s | LLM total 1.05s | tool none | TTS TTFA n/a | TOTAL … n/a | no_audio
+LATENCY | TURN 3 | STT final n/a | KB retrieval 0.11s (4 passages) | LLM TTFT 70.31s | LLM total 70.38s (2 requests) | tool 0.00s (record_discovery 0.00s) | TTS TTFA n/a | TOTAL … n/a | error
+LATENCY CALL SUMMARY | 3 response turn(s), 0 with first audio, 2 with errors | trace=a295c86df249af6e
+LATENCY CALL SUMMARY |   KB retrieval   avg 0.13s (n=2)   LLM TTFT   avg 35.52s (n=2)   LLM total   avg 35.71s (n=2)
+```
+
+Turn 3's 70 s is two `services.py` warnings — *the SDK is waiting to
+retry: 36 s*, then *31 s* — the free tier's per-minute token limit on a
+~4,000-token request; the retrieval before it took 110 ms, the tool 0 ms,
+the gap from the caller's text to the request 1.1 s. Turn 3's errors are
+ElevenLabs handshake timeouts (text mode still opens the TTS websocket).
+The earlier text runs of Phase 28 show the same 24–39 s waits on nearly
+every request. That is the baseline: on this key, the user-to-agent delay
+is the provider's rate limit, and nothing in the pipeline is above a
+second except the model itself.
+
+**The command for a real measurement call** (once a TTS key works; the
+bot must be reachable by the carrier):
+
+```bash
+cd server
+uv run health.py                                  # every component green first
+uv run bot.py -t signalwire 2>&1 | tee /tmp/aiva-bot.txt   # the deployment's transport; or -t smallwebrtc and talk at http://localhost:7860/client
+uv run call.py +923001234567                      # second terminal: dials the number through the carrier to the running bot
+grep -E 'LATENCY \\| (TURN|CALL SUMMARY)' /tmp/aiva-bot.txt   # the per-turn lines and the call summary
+```
+
+`validate.py live --to +NUMBER --dial --yes` runs the same call with the
+preconditions checked and the report read back; the per-turn record is in
+`call-reports/<call id>.json` under `latency.turns` either way. Without a
+carrier, `uv run bot.py -t eval --port 7861` plus
+`uv run python -m pipecat.evals run evals/conversation.yaml` gives the
+audio path with Kokoro as the caller.
+
+### Phase 28 (this session)
+
+**The brief:** the agent sometimes behaved as though it did not know the
+basics — what Hashmaker Solutions is and does, its services, who Alex is,
+why it is calling — although the campaign configuration held them. Fix how
+campaign context reaches the LLM without rebuilding anything, without a
+vector search, keeping detail in the knowledge base, and keeping campaigns
+isolated from one another.
+
+**What was actually wrong.** The brief *did* reach the prompt: `.env`'s
+`SALES_*` values become a `CampaignBrief`, a campaign's `configuration`
+overlays them per field, and `CampaignBrief.render` puts the company name,
+the offer, the claims and the meeting ask into the system instruction. What
+it never held was a plain description of the company or a line tying the
+agent's name, "AI assistant" and the company together — and, more
+importantly, `src/retrieval.py` runs on every question-shaped turn and
+appends a `role: user` block to the copy of the context sent for inference.
+"Can you share more details?" passes the gate, matches nothing above
+`KB_MIN_SCORE`, and the *nothing relevant found* block — the last text the
+model reads before it generates — said *if my last message asked for
+information about this business … you do not have it*. The playbook's
+knowledge section said the same ("the block is your only source of facts
+about this business"). Both outranked the brief, and the model said it had
+no information.
+
+**What changed (seven files, one new scenario):**
+
+- `src/conversation/brief.py` — `CampaignBrief.company_description` and
+  `.services`; configuration keys `company_description` and `services`;
+  `render` opens with *You are {agent}, an AI assistant calling on behalf of
+  {company}*, then *About {company}: …*, *Services: …*, the offer, *The
+  purpose of this call: find out whether they might need what we do (what
+  makes somebody a fit is listed below) and, if so, ask for {meeting ask}*,
+  the existing claims / criteria / next step / notes, then three rules:
+  basic questions (who you are, what the company does, what it offers) are
+  answered from the facts above and need nothing else; anything beyond them
+  must come from the knowledge base, and if it is not there either the agent
+  says so and offers a specialist follow-up, never inventing it; something
+  unrelated gets a brief honest answer and a steer back. **Isolation rule in
+  `from_configuration`:** the company facts travel with the company name — a
+  configuration that names a company different from the defaults'
+  (case-insensitive) inherits neither the description nor the services, and
+  gets only what it sets itself. The other fields overlay as before.
+- `src/conversation/playbook.py` — `_KNOWLEDGE`: the block *and the campaign
+  facts under WHY YOU ARE CALLING* are the only sources; *answer from those*;
+  the basics of what the company does are ordinary conversation.
+  `_NO_KNOWLEDGE`: the agent may state the campaign facts and the claims.
+- `src/prompts.py` — `KNOWLEDGE_BLOCK_FOOTER`: *the excerpts above and the
+  facts already in your instructions*; `KNOWLEDGE_NONE_BLOCK`: *answer it
+  from the facts in your instructions if they cover it; if they do not, then
+  you do not have it*. The header prefixes `is_injected_block` matches on
+  are unchanged.
+- `src/config.py` — `SalesConfig.company_description` / `.services` from
+  `SALES_COMPANY_DESCRIPTION` / `SALES_SERVICES` (optional; not in `gaps`).
+- `bot.py`, `src/campaigns/briefing.py` — the two fields ride the existing
+  defaults path. `src/automation/api.py` — `ConfigurationIn` accepts them
+  (same clear-on-empty rule). `src/app/server.py` — the config view shows
+  the deployment's values.
+- `.env` (this deployment: Hashmaker Solutions' description and three
+  services), `.env.example` (Meridian's, true to `evals/kb`, so
+  `eval_env.py`'s fixture carries them), `README.md`.
+- `evals/sales/company_overview.yaml` (text mode, five turns: the opening,
+  "who is this?", "share some more details about what you actually do",
+  "what services do you offer exactly?", "office in Brazil?") and the suite
+  manifest.
+
+**Size.** The Hashmaker block renders at 313 words including the existing
+claims and criteria; the new lines are about 110 words, some 150 tokens on
+a ~3,400-token request — under five percent, no measurable latency change.
+Nothing from the knowledge base is copied into the prompt.
+
+**Deterministic evidence.** `tests/test_conversation.py` gained *the
+campaign context (Phase 28)*: with and without a knowledge base, the
+instruction answers "what does your company do", "what services", "who are
+you" (Alex, AI assistant, the company), states the purpose, carries the
+three rules; a same-company campaign inherits the facts (case-insensitive;
+a campaign naming no company too), a different-company campaign inherits
+neither and its instruction carries none of the other business's facts
+while still naming its own; a different company's own facts are read from
+its configuration; no facts configured renders as before; no company name
+renders no rules and invents nothing; the two retrieval blocks point at the
+instruction's facts and still forbid guessing. Scenario 10's check was
+reworded for the new knowledge line. `tests/test_app.py`: the route writes
+and clears the two keys, a brief built from a Northwind campaign over
+Meridian defaults carries Northwind's facts only, the config view carries
+the deployment's. Every conversation-layer script and the app script pass;
+`test_knowledge.py` unchanged and green (the none block still says *nothing
+relevant found*).
+
+**Live evidence (text mode, the real bot on qwen3.8-27b through
+`eval_env.py`, judge gpt-oss-20b, four runs at 13:18–13:27):**
+- Run 1: the "are you a real person?" turn answered *AI assistant, calling on
+  behalf of Meridian* without the name — judged FAIL on the name. Fix:
+  `HUMAN_QUESTION_OVERRIDE` now says *say your name, that you are an AI
+  assistant, and who you are calling on behalf of*.
+- Run 2: the identity turn PASS; "share some more details about what you
+  actually do?" answered with a discovery question and no description
+  ("Sure. When you look at your fleet day to day, what eats the most
+  time…") — the DISCOVERY stage objective's *Do not explain what we do
+  yet* outranked a direct question. Fix: the objective now reads *Do not
+  pitch yet — but if they ask what we do or who you are, answer that first
+  in one or two sentences from the facts you were given, then ask your
+  question.* (Note the retrieval on that turn *did* find four passages at
+  0.53; the model still said nothing about the company — the stage block,
+  not the knowledge block, was the blocker there.)
+- Run 3: four of five turns PASS — identity; "what you actually do" answered
+  with the description and the four services; "what services exactly"
+  answered with the four; "office in Brazil?" answered *I don't have that
+  in front of me — support teams are Rotterdam and Austin — a specialist
+  can confirm* and steered back. The judge failed the last turn for not
+  listing Singapore: a fault in my criterion (the handbook puts support in
+  Rotterdam and Austin), reworded to what the handbook holds.
+- Run 4: **5/5 PASS** (`eval-runs/phase28_company_overview_4`). Replies:
+  "We build fleet management software for mid-sized logistics operators —
+  live tracking, route planning, maintenance scheduling and driver safety,
+  all as a subscription with no hardware to buy…"; the Brazil turn again
+  honest, with the specialist offer and a steer back.
+- Seen, not touched: in run 2 the greeting's `llm_response` event carried a
+  `</think>` fragment ("I'll start by calling them and introducing myself
+  as instructed") — a reasoning leak on the *text* event; the spoken-text
+  stage is what protects the voice, and the eval judge saw it as part of the
+  greeting. Prompt size measured by the runs: 3,856–4,089 prompt tokens per
+  request (knowledge excerpts included), in the range recorded since
+  Phase 7.
+
+**Observed, not changed.** The per-field overlay still lets a
+different-company campaign inherit the environment's `offer`, `value_points`,
+`qualification_criteria`, `meeting_ask` and `notes` when it does not set
+them — so a Northwind campaign that sets only `company_name` on this
+deployment would still be told to ask for "a meeting call with a Hashmaker
+Solutions specialist". That is Phase 6 behaviour (one deployment, one
+business), left alone because the brief asked for the smallest change; the
+isolation rule covers the two new fields. Extending it to those five is a
+one-line change in `from_configuration` if the deployment ever runs
+campaigns for two businesses.
+
+### Phase 27 follow-up (this session)
+
+**The brief:** "continue from where you left" — the Phase 26 write-up ends
+with a list to run once Groq's daily budget reset: the text scenarios the cap
+had blocked, `not_interested` / `price_objection` / `unrelated_question`
+with `-r 2`, then the audio path. This session ran them, fixed what they
+found, and built nothing new. The three code changes are all in the
+conversation layer and the eval harness glue; no route, table, page,
+pipeline stage or telephony file changed.
+
+**The clock first.** `test_production` check 4 ("the worker selected and
+reserved the first due prospect by itself") failed at 18:19 on 2026-09-10
+and passed at 12:28 today with nothing changed — the prospects it imports
+fall under the deployment's calling hours, which close at 18:00 local. Run
+it inside the window.
+
+**What the runs found, and what changed.**
+
+- *`send_information` on qwen3.8 failed the judge:* "I'd rather not waste
+  your time with a generic email, Sarah." The mechanics all held — the
+  detector recorded the objection before the model replied, the model
+  called `record_objection` too, one entry — but the spoken reply ignored
+  "say a colleague will send it over". The bot log shows why: the
+  `[call guidance]` override is in the request that produces the *tool
+  call* and gone from the request that produces the *reply* (overrides
+  apply to one inference), and the tool result the reply is written from
+  was the generic objection line ("acknowledge… answer honestly… ask one
+  question"). `TOOL_GUIDANCE["send_information"]` now repeats the
+  instruction in the tool result — you cannot send anything, a colleague
+  will, one short question, never say it was sent, do not talk them out of
+  it — and `tools.py` picks it by kind. Scenario 6 of
+  `test_conversation.py` reads the tool result and pins it. On the
+  substitute model the scenario then passed ("I'll have a colleague email
+  you the details. What specific information would be most helpful?");
+  qwen3.8 had no budget left for the rerun.
+- *`not_interested` on qwen3.8, one run of two:* the model answered "we're
+  really not interested in anything like that" with
+  `record_objection(NOT_INTERESTED)` instead of `set_interest`, said a
+  polite goodbye, and the call sat in `OBJECTION_HANDLING` with nothing to
+  end it — `closing_line_needs_hangup` is only true in a rejection state.
+  The detector had logged `SIGNAL | REJECTION` on that turn. Now
+  `SalesConversation` keeps the signals of the latest user turn
+  (`_turn_signals`), and `record_objection` with kind `NOT_INTERESTED` on a
+  turn where `REJECTION` was heard delegates to `set_interest(NOT_INTERESTED)`:
+  the interest level, the single objection entry, the transition, and —
+  through `tools.py`, which now reports `stopped_selling` — the
+  `not_interested` guidance (goodbye and `end_call`), after which the
+  conversation's own hang-up applies. Without the heard rejection (a model
+  that files "we already have somebody" as `NOT_INTERESTED`) nothing changes:
+  the objection is handled. Both halves pinned in scenario 2. The other run
+  of the pair passed all three turns the ordinary way (`set_interest`,
+  goodbye, `end_call`, silence for 8 s).
+- *The second attempt of every `-r 2` pair introduced the wrong company.*
+  Attempt 1 said Meridian, attempt 2 said Hashmaker Solutions, from the same
+  manifest and the same spawn line. `evals/groq_judge.py` called
+  `load_dotenv(server/.env)` at import, in the harness process; the judge is
+  first used after attempt 1's greeting, so from then on the harness's own
+  environment carried every `.env` value, the second bot inherited it, and
+  `evals/eval_env.py` kept the shell's `SALES_*` over the sample
+  configuration — by design, since a sample variable set in the shell is
+  meant to win. The judge now reads `GROQ_API_KEY` with `dotenv_values` and
+  puts nothing in the environment (verified: importing it changes no
+  variable). Failed §48. Yesterday's `unrelated_question -r 2` had the
+  same defect and nobody noticed because attempt 2 failed for a different
+  reason first.
+- *The bot and the judge were spending one per-minute budget.* Groq's free
+  tier is 7,000 input tokens a minute per model; a tool turn's second
+  request (~3,900 tokens with the knowledge excerpts) was refused while the
+  judge, on the same model, was reading the turn before it; the SDK's two
+  retry waits (33 s, 30 s) outran the supervisor's 60 s stall limit and the
+  session ended with the agent silent; one judge call was rate-limited
+  outright. `groq_judge.py` now takes `EVAL_JUDGE_MODEL` from the shell (a
+  scenario's `judge.eval.model` still wins) and `EVAL_JUDGE_MAX_TOKENS`, a
+  floor under the harness's 200-token verdict cap, through a small
+  `GroqLLMService` subclass that raises `max_tokens` on `run_inference`.
+  gpt-oss-20b answers the verdict ask inside 200 tokens through the
+  OpenAI SDK here (the reasoning goes to its own field), and 900 is set
+  anyway; `qwen/qwen3.6-27b` leaks `<think>` into the content and is not a
+  judge. The rest of the day's runs used `EVAL_JUDGE_MODEL=openai/gpt-oss-20b
+  EVAL_JUDGE_MAX_TOKENS=900`. Documented in `evals/README.md`.
+
+**The runs, in order.** All text mode unless said; a fresh bot per run
+through `evals/eval_env.py`; `-d` on every run; run dirs
+`eval-runs/phase27-*` (configured model, judge on qwen3.8),
+`phase27b-*` (after the judge fix), `phase27c-*` (judge on gpt-oss-20b),
+`phase27d-*` (bot on gpt-oss-120b) under `D:\Ai-Voice-Agent\eval-runs`,
+the audio pair under `server/eval-runs`.
+
+- *Configured model, qwen3.8:* `send_information` FAIL (the reply above;
+  fixed). `vague_answers` PASS. `unknown_question` — the bot booted and
+  then both the Deepgram and the Cartesia websocket timed out on their
+  opening handshake at once, the supervisor ended the session dead on
+  arrival, the harness saw connection refused: a network blip, not code.
+  `meeting` three of four turns: discovery, calendar checked, two real
+  slots offered, `book_meeting` called, Cal.com refused
+  `sarah.khan@example.com` (HTTP 400 `email_domain_cannot_receive_mail`),
+  the agent said a colleague would confirm and ended the call — correct on
+  a refused booking; a real booking needs `DEV_PROSPECT_EMAIL=<a real
+  address>` on the command line and creates a real event, so it was not
+  run unasked. `not_interested` ×2: one judge fault on the greeting (the
+  judge was handed the whole greeting and answered "continue" about "Hi
+  Sarah" alone), one the filed-objection case above. After the fixes:
+  `not_interested` ×2 — one PASS three of three, one the same greeting
+  judge fault; `send_information` — the ITPM refusal above; `unrelated_question`
+  ×2 — the calling-from turn PASS both times ("support team is based in
+  Rotterdam and Austin, so no, I'm not local to Lahore"; "I only know the
+  support teams are based in Rotterdam and Austin"), attempt 1's weather
+  turn then got no reply in 150 s (ITPM, retries, stall) and attempt 2's
+  judge call was rate-limited. With the judge on gpt-oss-20b:
+  `price_objection` ×2 — attempt 1 turns 1–2 PASS ("I don't have pricing
+  to quote you on this call… how many vehicles are you running?"), turn 3
+  and all of attempt 2 refused on **tokens per day** (197,441 of 200,000).
+- *Substitute bot, `GROQ_MODEL=openai/gpt-oss-120b`, judge gpt-oss-20b, 30 s
+  between runs:* `send_information` PASS. `unrelated_question` PASS ("I
+  don't have that information right now, but I can find out for you";
+  the weather deflected). `unknown_question` FAIL by the judge: "Yes, we
+  integrate with SAP Transportation Management, and Meridian is ISO 27001
+  certified and undergoes an annual SOC 2 Type II audit" — every word from
+  the handbook, the same reply yesterday's judge passed; today's read the
+  ISO line as answering the SAP-certification question. Borderline, and a
+  judge difference, not a product change. `price_objection` FAIL: 398 of
+  the bot's 400 output tokens (`LLM_MAX_OUTPUT_TOKENS`) went to reasoning,
+  no words, no tool call, the harness waited 150 s — the gpt-oss artefact
+  the Phase 26 notes describe for the 20b, now seen on the 120b. *Audio*
+  (Kokoro in, Moonshine out, the plain bot on the deployment's company):
+  `conversation` PASS three of three — the bot spoke through Cartesia and
+  every reply was transcribed and judged. `barge_in`: both interruptions
+  fired, the sky reply (71 characters) was released to the speech stage and
+  discarded on the interruption before anything of it was synthesised —
+  the mechanics the scenario exists for — but the substitute model
+  answered "I don't have that information" to the sky and restarted its
+  greeting after the second interruption instead of saying Paris, so the
+  judge failed it; qwen3.8 said Paris yesterday. `interruption` PASS three
+  of three ("You asked who I'm with — I'm Alex, an AI assistant calling on
+  behalf of Meridian Fleet Systems", then one question, no pitch).
+
+**Still unrun on the configured model**, because its day ran out:
+`send_information` and `not_interested` with the fixes, `unknown_question`,
+`price_objection` turn 3, and the audio scenarios. The commands are the
+ones above with `GROQ_MODEL` unset; leave a minute between runs and keep
+the judge on gpt-oss-20b.
+
+**Not done, on purpose.** No prompt change for the substitute model's
+restart-after-interruption or its reasoning-token exhaustion; it is not the
+deployed model. No real Cal.com booking. No change to the harness's own
+greeting judge.
+
+### Phase 27, second part (this session)
+
+**The brief:** a role choice on sign-up (Viewer / Operator / Admin);
+Viewer active at once as before; Operator and Admin created as pending
+and unusable until an existing Admin approves the request as that role;
+the minimum admin UI to approve or reject; the role from the browser
+never trusted; nothing else in authentication or RBAC changed.
+
+**What was built** (on the first part's pieces; the login route's logic,
+sessions, roles and permissions are untouched):
+
+- `dashboard_users.status` (`active` / `pending`), `decided_by`,
+  `decided_at` — in `create_schema` for a new database and as `ADD COLUMN
+  IF NOT EXISTS` for one that already has the table (run `campaign.py
+  init` once). `DashboardUser.status/.public()`, `add_dashboard_user(...,
+  status=)`, `list_dashboard_users(status=)`, `decide_dashboard_user(id,
+  approve=, decided_by=)` — approve is an `UPDATE … WHERE status =
+  'pending'`, reject a `DELETE … WHERE status = 'pending'`, both
+  `RETURNING`, so a request is decided once.
+- `User.status` / `User.active` (a `DASHBOARD_USERS` entry is always
+  active); `UserDirectory.update()` and `remove()` for table-backed
+  entries only (an environment entry is never replaced or removed);
+  `USER_ACTIVE`, `USER_PENDING`.
+- `RegisterIn.role` (default viewer). The route parses it with the
+  existing `parse_role` (anything else is a 422 on `role`), and the status
+  is decided **by the server**: viewer → `active`, operator or admin →
+  `pending`. Any other field in the body (`status`, say) is ignored by the
+  model. The 201 carries `status`; the audit outcome says *awaiting
+  approval*.
+- The dashboard login: `load_registered_user` now re-reads a registered
+  user's row on every login (an environment user is returned as is), so an
+  approval or rejection on another process is seen; after a successful
+  password check a non-active user gets a 403 page *awaiting an
+  administrator's approval* with `X-Aiva-Login: pending`, no cookie, and
+  an `auth.login_pending` audit row. A wrong password still says only
+  *wrong name or password*.
+- `GET /api/app/users/pending` (the `manage` permission, i.e. admin — a
+  session or an admin API key) and `POST /api/app/users/{id}/approve` /
+  `/reject` (the same permission plus the same-site `origin_allowed`
+  check). Approve updates the directory entry (`update`, or `add` on a
+  process that never loaded it); reject removes it. `auth.signup_approved`
+  / `auth.signup_rejected` on the audit log with the user's name and role.
+  404 when nothing is pending under that id.
+- `web/app.js`: a *Role* select on the Register page with the approval
+  hint; after a pending sign-up the login shows *Your request for an
+  Operator account was sent… An administrator has to approve it*; the
+  login recognises the 403 + header and says the account awaits approval;
+  Settings → *Sign-up requests* card (admins only): name, email, requested
+  role, when, *Approve as Operator/Admin* and *Reject*, each behind the
+  existing confirm dialog, the list reloading after a decision.
+- `SecurityConfig.registration_role` / `DASHBOARD_REGISTRATION_ROLE`
+  removed; `describe()` says *sign-up on (viewer at once; operator and
+  admin on approval)*.
+
+**Security checks, and where each is enforced:** the role in the payload
+selects only between `active`-as-viewer and `pending`; `status` in the
+payload is dropped by the Pydantic model; a pending row cannot obtain a
+session at all, so it can use neither operator nor admin routes; the
+decision routes demand `manage`, which viewers and operators do not hold
+(403) and strangers cannot reach (401); a cross-site post is refused even
+with an admin credential; a pending admin cannot approve itself (no
+session); approval grants exactly the stored role, never one from the
+request; rejection frees the name and is audited.
+
+**Verified (2026-09-10).** `tests/test_app.py` 136 checks — the eleven
+scenarios: (1) viewer sign-up active; (2) operator sign-up pending; (3)
+admin sign-up pending; (4) pending operator: right password 403, no
+cookie, no read or write; (5) pending admin: the same, no access to the
+requests or the audit log; (6) admin approves operator → active operator,
+signs in, writes; (7) admin approves admin → active admin, signs in by
+email, can decide requests; (8) operator cannot list or decide; (9)
+viewer cannot; (10) `role=admin, status=active` in the body → pending,
+cannot sign in, cannot approve itself, strangers and cross-site refused;
+(11) the configured operator and viewer, the admin key, the audit route
+and `ROLE_PERMISSIONS` unchanged. Plus: a decision made on another
+process is seen at the next login without a restart; rejection frees the
+name. `test_security` 214, `test_dashboard` 161, `test_automation` 245,
+`test_campaigns` 248, `test_engine` 68 unchanged and passing. `campaign.py
+init` added the three columns to this machine's database in place. The
+same scenarios were driven over HTTP against a private `app.py` on 7901
+over the real database, and the Register page's role choice, the pending
+notice, the pending login refusal and the admin's Sign-up requests card
+(approve and reject through the confirm dialogs) were walked in the
+installed Chrome through Playwright. Test rows deleted afterwards; the
+audit rows kept.
+
+**Known limits.** No page to change a role after approval, disable or
+delete an active user (SQL on `dashboard_users`, or `DASHBOARD_USERS`).
+Nobody is notified of a pending request: an admin finds it on Settings.
+An approved admin holds the same `manage` permission as a configured one,
+by design (the brief: *approve as the requested role*).
+
+### Phase 27 (this session)
+
+**The brief:** move app-user registration from the terminal (`security.py
+hash-password`, then paste into `DASHBOARD_USERS`) to the frontend, reusing
+the existing backend, hashing, validation and auth; a Register page with
+name, email, password and confirm; clear validation and backend errors; on
+success the existing login flow; existing logins unchanged; nothing else
+touched.
+
+**What existed.** No registration API and no user table: Phase 18 put users
+in `DASHBOARD_USERS` (`name:role:hash`) on purpose (§6, Phase 18: *users in
+the environment, not in a table*). The login (`src/dashboard/web.py`)
+authenticates against `config.security.users`, a `UserDirectory`, in
+constant time; the hash is scrypt from `src/security/passwords.py`; the
+name rule is `UserDirectory.parse`'s. That decision is now superseded for
+sign-ups only: hand-configured users stay in the environment.
+
+**What was built** (every piece reuses the Phase 18 code; nothing about
+sessions, cookies, roles, masking or the login route's logic changed):
+
+- `src/security/roles.py` — `User.email` (None for an environment user);
+  `UserDirectory.add()` (a `DASHBOARD_USERS` entry always wins; a name or
+  email already present is refused), `get()` by name **or email**,
+  `has_email()`; `is_user_name`, `is_email`, `validate_registration(name,
+  email, password, confirm)` → a problems map keyed by field, using the
+  existing name regex and `MIN/MAX_PASSWORD_LENGTH`; `NAME_RULE`,
+  `PASSWORD_RULE` so the page and the API say the same words.
+- `src/campaigns/store.py` — the `dashboard_users` table (`create_schema`,
+  so `campaign.py init` adds it; unique on `lower(name)` and
+  `lower(email)`), `DashboardUser`, `DuplicateUserError(field, value)`,
+  `add_dashboard_user`, `get_dashboard_user(name_or_email)`; both through
+  `_optional_table` so a missing table names `campaign.py init`.
+- `src/config.py` — `SecurityConfig.registration_enabled`
+  (`DASHBOARD_REGISTRATION_ENABLED`, default true) and `registration_role`
+  (`DASHBOARD_REGISTRATION_ROLE`, default viewer; `admin` is a config
+  problem and falls back to viewer); `describe()` says `sign-up on (as
+  viewer)`.
+- `src/dashboard/web.py` — `user_from_row`, `load_registered_user`: the
+  login, before authenticating a name the directory does not know, asks the
+  store for a sign-up and adds it to the directory — so a user registered
+  on another process, or before this one started, signs in here. A missing
+  table or an unreachable database is logged and treated as "no such user"
+  (the page still says *wrong name or password*). Everything after that
+  line is the Phase 18 login.
+- `src/app/server.py` — `GET /api/app/register` (public: whether the page
+  is open, the role, the rules) and `POST /api/app/register` (same-site
+  only via `origin_allowed`, limited per address with the login's rate,
+  refused when the login is off or the page closed; 422 with a `fields`
+  map, 409 naming the field for a duplicate name or email — the directory
+  is asked first so a configured name cannot be taken, then the table's
+  unique index — 503 when the store is not up; 201 with name, email, role;
+  `auth.registered` on the audit log; the new user joins the directory at
+  once).
+- `web/app.js` — `renderSignedOut()` (the login, or at `#/register` the
+  Register page), `loadRegistration()`, `showFieldErrors()` (the design
+  system's `.field.invalid` + `.err`), `renderRegister()`; the login shows
+  *Don't have an account? Create one* only when the server says sign-up is
+  open, and after a sign-up shows a green notice with the name pre-filled.
+  `web/styles.css` — three lines (`.login.register`, `.login .foot`).
+- `tests/test_app.py` — `check_registration()`: 33 checks (the five
+  scenarios, the configured-name refusal, the cross-process login, the role
+  knob, admin refused, the page closed, login off, the rate limit, the
+  script carries the form). `tests/test_automation.py` — the fake store's
+  two methods.
+
+**What was not touched:** `bot.py`, the pipeline, the scheduler, the
+dialer, telephony, n8n, campaigns, prospects, the dashboard's pages and
+JSON, the standalone `/dashboard/login` HTML page (it still serves the
+old form; the Register page is the application's), sessions, roles,
+masking, `security.py`.
+
+**Verified (2026-09-10).** `tests/test_app.py` 101 checks; `test_security`
+214, `test_dashboard` 161, `test_automation` 245, `test_campaigns` 248,
+`test_engine` 68 — unchanged and passing. `uv run campaign.py init` added
+the table to this machine's database. A private `app.py --port 7901
+--no-engine --no-deliver` over the real database, with a known operator in
+`DASHBOARD_USERS`: over HTTP, bad input → 422 naming all four fields, a
+mismatch → 422 on `confirm_password` alone, a good form → 201 and a row
+with a scrypt hash, the same email in another case → 409 `email`, the same
+name in another case → 409 `name`, a sixth attempt inside a minute → 429,
+the new user's wrong password → 401, the right one → 303 and a viewer
+session on `/api/app/session` and `/dashboard/api/me`, by email too, and
+the configured operator still signs in. Then in the installed Chrome
+through Playwright (`walk_register.js`, scratch): the link on the login,
+the four fields at `#/register`, the empty form and the bad form each show
+four field messages without a request, the duplicate email shows the 409
+under the email field, success returns to the login with the notice and
+the name filled, the wrong password is refused on the page, the new user
+reaches the dashboard as *browseruser · viewer*, the operator still signs
+in, the direct link and the way back work, and the page fits 400 px. The
+two test rows were deleted afterwards; their eight audit rows were left
+(an audit log is not edited). **A third row, `Jhon`, appeared in the table
+during the test and was not created by this session — it was left in
+place.**
+
+**Known limits.** A sign-up's role is fixed at the configured default;
+there is no page to promote, disable or delete a user (SQL on
+`dashboard_users`, or `DASHBOARD_USERS`). The directory is per process:
+a sign-up is seen by another process at that user's first login there,
+which is what `load_registered_user` is for. The standalone
+`dashboard.py` login gets the same lookup (same module) but has no
+Register page of its own.
 
 ### Phase 26 (this session)
 
@@ -467,6 +1666,250 @@ performance; nothing broken; the test suite and a manual verification.
   before the second pass (inline SVGs without a size, the activity feed's
   company line wrapping, KPI tiles wrapping to a second row, the sidebar
   showing on the sign-in screen).
+
+**The second part of the phase: the conversation requirements.** A
+read-only audit against the ten requirements (introduce honestly,
+personalise without inventing, discover, qualify, present value, handle
+objections, book a meeting, end politely, sound natural, respect opt-outs)
+plus after-call persistence rated five PARTIAL, one UNPROVEN and four PASS.
+The fixes, in the order they mattered:
+
+- **The reasoning leak (highest priority).** Reproduced with a direct
+  request to `qwen/qwen3.8-27b` on Groq: with tools advertised, the model's
+  thinking arrives *as ordinary content* ("Let me record this question as it
+  seems unrelated…"), untagged, and the pipeline spoke it. Groq's
+  `reasoning_format: hidden` returns the answer only — three clean runs —
+  and is now requested for every Groq reasoning model (`qwen3`, `gpt-oss`,
+  `deepseek-r1`, `minimax`, `qwq`) through `Settings.extra` as
+  `extra_body` (`services.reasoning_extra`; `LLM_REASONING_FORMAT`
+  hidden | parsed | off, `REASONING_FORMATS`). A first attempt passed it as
+  a keyword argument and the SDK refused every request — Failed §45. Belt to
+  that brace: **`src/spoken_text.py`** — `SpokenTextScrubber` (stateful,
+  chunk-by-chunk) and `SpokenTextFilter`, a `FrameProcessor` between the
+  LLM and the TTS in `bot.py`, removing `<think>…</think>` and its
+  relatives across chunk boundaries, a closing tag with no opener, tool
+  markup emitted as text (`<tool_call>`, `<function=…>`), special tokens
+  (`<|…|>`), and holding back text with no letters or digits until there is
+  a word to attach it to — so a lone `.` or `…` after a tool call, the
+  "No valid transcripts passed" Cartesia refused three times on the
+  2026-09-08 call, never reaches the vendor. Hidden text is counted and
+  logged once per response (`SPEECH | kept from the caller: …`), never
+  reconstructed. `TTSSpeakFrame`s (written by this code) pass untouched.
+- **The introduction.** `opening_instruction` no longer says "do not say
+  you are an AI unless they ask": the first sentence gives the name, says
+  plainly it is an AI assistant, and names the company, whatever the
+  compliance policy adds; `_CONDUCT`'s opening bullet says the same.
+  `test_compliance.py`'s "Phase 6 opening" check was updated to the new
+  wording. `evals/sales/introduction.yaml` (new, in the suite manifest)
+  judges the opening and the "is this a real person?" turn.
+- **Annoyance.** One `_CONDUCT` line: apologise for the interruption before
+  anything else when they are annoyed at being called, answer plainly, let
+  them decide. Added after the `angry` scenario's first run answered the
+  "how did you get my number" question honestly but without an apology.
+- **The 40–60 s stall, diagnosed, not papered over.** Not model latency,
+  not a timeout, not tool execution: the free Groq tier's
+  tokens-per-minute limit (8,000) against ~3,500–4,000 prompt tokens per
+  request — the `interested` run made 8 requests, 31,992 prompt tokens, and
+  the SDK retried six 429s with `retry-after` waits of 19–33 s each, which
+  the log never showed because the OpenAI SDK logs them at INFO on a
+  stdlib logger nothing listened to. `services._forward_provider_retries`
+  now forwards those lines as `LLM | the provider refused the request and
+  the SDK is waiting to retry: … in 23.5 seconds` — the wait is unchanged,
+  and named. The only real fix is fewer tokens per request or a paid tier;
+  HANDOFF §"Considered and rejected" already records why stage-filtered
+  tools were not done.
+- **The evals.** Three judge criteria now state what the knowledge base
+  holds (`unknown_question`: the SAP integration, no certification;
+  `unrelated_question`: Rotterdam, Austin, Singapore; `price_objection`: the
+  price list), because a judge that cannot see the handbook failed correct
+  answers as inventions. `not_interested` asserts `set_interest` +
+  `end_call` + the goodbye on one turn — the old third turn ("Yeah. Bye.")
+  could never be answered on a call the agent had, correctly, ended.
+  `within_ms: 150000` on every post-greeting expectation of the nine
+  scenarios that lacked it (the harness's 60 s default measured Groq's wait).
+
+**Evidence, by kind.** *Deterministic* (no keys): `test_spoken_text.py`
+(new), `test_compliance.py`, `test_conversation.py`, `test_actions.py`,
+`test_results.py`, `test_realtime.py` all pass; `uv run validate.py` (2026-09-10, after the change): **25 scripts, 3,839 checks, 0 findings failed, 11 warnings** — the health probe's LLM read passed on a trickle of tokens that a scenario could not.
+*Real-model, text mode* (the real bot, the real prompt, Groq, the local
+calendar, the knowledge base; judge = the same Groq model):
+`introduction` PASS (name, AI, company, reason, question; honest on "is
+this a real person"); `wants_human` PASS; `unknown_question` PASS;
+`interested` PASS end to end (opening, objection recorded, two discovery
+records, calendar checked, no false booking claim); `existing_provider`
+PASS; `angry` PASS (apology first, honest answer, clean goodbye).
+`unrelated_question`: turns 1–2 PASS, turn 3's reply was right ("I don't
+have the weather on hand… do you run any vehicles?") and the judge answered
+"continue" instead of a verdict — a judge fault. `price_objection`: turn 1
+PASS, turn 2 quoted "fourteen euros a vehicle a month, billed annually" —
+the price list's own figure — and the blind judge called it an invention;
+the criterion now names the list and was not re-run. `not_interested`: the
+goodbye-and-hang-up turn passed the judge once (batch B, on the old
+scenario shape); its re-run on the new shape hit the daily cap. **Not run
+today: `meeting`, `do_not_call`, `callback`, `send_information`,
+`vague_answers`, and every audio scenario (`conversation`, `barge_in`,
+`interruption`)** — Groq's 200,000 tokens-per-day cap was reached at 15:46
+after sixteen scenario runs. *Synthetic audio* and *real carrier*: nothing
+this session. The filter's effect on what the voice actually says is
+therefore proven by its unit checks and by the eval bots conversing through
+it, not by a listened-to call.
+
+**Follow-up run, 2026-09-10, after the Groq daily budget reset** (the same
+day; the eight scenarios the cap had blocked, then the audio scenarios;
+`.env` had meanwhile been changed to a different company — Hashmaker
+Solutions, custom software — while the knowledge base still holds the
+Meridian handbook).
+
+- *Text mode, real model:* `price_objection` PASS (acknowledged the cost
+  concern without a number; then quoted the price list's own fourteen
+  euros, which the judge now knows is the list); `do_not_call` PASS
+  (`mark_do_not_call`, apology, goodbye, hang-up); `callback` PASS
+  (`schedule_callback` refused on an eval session with no prospect row, the
+  agent said a colleague would arrange it, goodbye, `end_call`).
+  `meeting`: three of four turns — discovery, calendar checked, two real
+  slots offered, `book_meeting` called; the booking was refused because
+  `CALENDAR_PROVIDER=calcom` needs an attendee email and an eval session has
+  none, so the agent asked for one instead of claiming a booking — correct,
+  and the scenario predates the Cal.com requirement. `vague_answers`: two of
+  three turns; the third reply re-introduced itself and asked whether now
+  was a bad time instead of narrowing the question — a real weakness on a
+  caller who gives nothing. `send_information`: the reply was honest ("I'm
+  not able to send an email at all… have a specialist call you back") but
+  `record_objection(SEND_INFORMATION)` was not called — the record missed
+  the objection. `unrelated_question`: with the company now Hashmaker and
+  the handbook still Meridian's, "where are you calling from?" got "my
+  team's based out of a mix of locations" — nothing invented, nothing
+  plain either. **`not_interested`, three runs:** the objection and the
+  no were recorded every time and the goodbye was polite every time
+  ("Understood, and I'm sorry for the interruption… Take care"), but
+  `end_call` followed in only one of three; the tool-result guidance after
+  `set_interest` never named the tool, and now does ("say goodbye, and call
+  end_call in this same turn") — the re-run hit the cap again (a second
+  organisation's key, also at 200,000 tokens per day) and is **not yet run**.
+- *Audio mode, synthesised caller (Kokoro in, Moonshine out), recordings
+  reviewed offline with a segment-and-silence script and re-transcribed:*
+  `conversation` PASS — every reply's last sentence present in the audio,
+  no reasoning, no markup, no wordless fragment; the two long gaps (5 s,
+  19 s) coincide with logged Groq retries. `barge_in` PASS — the "sky"
+  reply was interrupted while the model was still generating, the held
+  reply was discarded, nothing of it was ever synthesised, and the bot
+  answered "Paris". `interruption` (Phase 6's, two runs): the recording
+  shows the bot cut mid-word by "sorry, hang on" and then answering who it
+  is; run 1 was failed by the judge on the greeting with a verdict that
+  contradicts its own input ("the reply was empty"), run 2 by adding one
+  line of pitch after the answer. Mechanics proven; restraint judged
+  PARTIAL.
+- **Two more fixes came out of this run.** (1) In the `meeting` run a
+  tool-result turn streamed the model's draft answer, then a bare
+  `</think>`, then the real answer — Groq's `hidden` strips a block only
+  when its opener is there. The stage now **holds a reply until the model
+  finishes it** (`SpokenTextScrubber.hold_all`, default on), so a late
+  closing tag discards the draft before anything is synthesised; the cost
+  is the model's own generation time for the reply, a few hundred
+  milliseconds on Groq. (2) That change exposed a text-mode-only artefact:
+  the eval harness marks every frame `skip_tts=True` in text mode, and the
+  held reply, built as a new frame without the flag, was synthesised while
+  the end frame that flushes the last sentence was skipped — so the last
+  sentence of every reply went missing *in text-mode evals only* (a bare
+  pipeline with the real Cartesia service, and every audio run, kept all
+  of them). The held reply now inherits the response's flag. Failed §46.
+- `uv run validate.py` after the follow-up: **25 scripts, 3,847 checks, 11 warnings; one failed finding — `health.py crm`, HubSpot not answering within 6 s on that run (a network hiccup seen before, not a code change).**
+
+**Second follow-up, 2026-09-10 — the requirement-level leftovers.** Five
+things were still open after the runs above: the send-information request
+went unrecorded, three vague answers in a row got the introduction again,
+the hang-up after a no came in one run of three, the eval bots were
+introducing the deployment's company while answering from Meridian's
+handbook, and the meeting could not be booked because an eval session had
+no attendee email. What changed:
+
+- *Send information is recorded when it is heard.* `signals.py` gained
+  `SEND_INFORMATION` ("email me something", "put it in an email", "send it
+  over"…); `note_user_turn` records the `SEND_INFORMATION` objection and
+  the next action itself, the way a do-not-call is, and the model is then
+  told to call `record_objection` too (`SEND_INFORMATION_OVERRIDE`) — the
+  merge in `add_objection` means the two cannot double-count. The reply is
+  honest by instruction: a colleague will send it, nothing has been sent.
+  `test_conversation.py` scenario 6 pins detection, the deterministic
+  record, the merge, and that "we send forty trucks out" is not a request.
+- *Vague answers narrow the question.* `VAGUE` fires on a short,
+  content-free hedge ("I suppose", "it depends", "hard to say", up to
+  twelve words, no digits, nothing else detected in the turn — "maybe
+  Thursday" is a time, "not really, we run forty trucks" is an answer);
+  `VAGUE_OVERRIDE` says: no re-introduction, no "is now a bad time", no
+  repeat — one simpler question answerable with a number, a yes or no, or
+  a choice. Scenario 12 pins the detector's edges.
+- *The hang-up after a no is the conversation's decision.*
+  `SalesConversation.closing_line_needs_hangup` is true when the reply just
+  spoken, in `NOT_INTERESTED` or `DO_NOT_CALL`, was not interrupted, was
+  not a question, was not empty, and `end_call` has not run; `bot.py`'s
+  `on_assistant_turn_stopped` then calls `begin_ending` and queues the same
+  `EndWorkerFrame` the tool would have — after the goodbye has played,
+  because that event fires after `transport.output()`. Measured before the
+  change: `end_call` with the goodbye in one run of three on qwen3.8 and
+  none of three on gpt-oss-120b, the caller left on a silent line until
+  the idle nudge. `not_interested.yaml` no longer asserts the tool call;
+  it ends with an observation-only turn (`absent: true`, 8 s) because the
+  harness otherwise disconnects the moment the judge passes the goodbye —
+  which had been cutting the goodbye off and skipping the bot's own
+  hang-up entirely. Pinned in scenario 2 of `test_conversation.py`.
+- *The eval bots run on the sample configuration.* `evals/eval_env.py`
+  runs `bot.py` with the `SALES_*` and `DEV_PROSPECT_*` values of
+  `.env.example` (Meridian Fleet Systems; Sarah Khan of Ravi Logistics,
+  now with `DEV_PROSPECT_EMAIL=sarah.khan@example.com`) applied *after*
+  `.env`, by patching `dotenv.load_dotenv` for that process; keys,
+  providers, database and calendar stay the deployment's. `suite.yaml`
+  spawns through it. The dev prospect fixture gained `email`
+  (`config.py`, `bot.py`), so a Cal.com booking on an eval session has an
+  attendee — and a sample variable already set in the shell beats the
+  template, because Cal.com refuses an attendee whose domain cannot
+  receive mail (`sarah.khan@example.com` → HTTP 400
+  `email_domain_cannot_receive_mail`): a real booking eval needs
+  `DEV_PROSPECT_EMAIL=<an address of your own>` on the command line.
+  Nothing in the meeting system changed.
+- *One line of prompt.* "Where the company or its people are based is not
+  small talk" — the handbook's passage about Rotterdam and Austin was being
+  retrieved and injected for "where are you calling from?" and the reply
+  was still "based here… remotely", neither the fact nor "I don't know".
+
+**Evidence.** Deterministic: `test_conversation.py`, `test_actions.py`,
+`test_compliance.py`, `test_spoken_text.py`, `test_results.py` pass; ruff
+clean. Real model — the configured qwen3.8 hit its 200,000-token day on
+*both* organisations' keys during this work, so most runs used
+`openai/gpt-oss-120b` as the bot (a shell `GROQ_MODEL`; `.env` does not
+set it) and gpt-oss-20b as the judge through a scratch factory that lifts
+the harness's 200-token judge cap to 900 (reasoning models return nothing
+under 200). On that pair, through the sample-config wrapper:
+`send_information` PASS — the detector recorded the objection before the
+model replied, the model called `record_objection` too, one entry, "I
+don't have the ability to email you directly, but I can have a colleague
+follow up" plus one question; `vague_answers` PASS — "How many vehicles
+does Ravi Logistics operate?" then "Do you have ten or more vehicles in
+your fleet?", no re-introduction; `unknown_question` PASS (SAP TM, ISO
+27001, SOC 2 from the handbook); `not_interested` **three of three** —
+`set_interest`, a polite goodbye, then the hang-up: the model's own
+`end_call` in one run, the conversation's in the other two ("CALL |
+closing line spoken" in the bot log), and nothing said afterwards.
+`unrelated_question`: the run on gpt-oss-120b before the prompt line was the failure that prompted it (the Rotterdam/Austin passage was retrieved and injected, best score 0.53, and the reply was still "based here… reaching out remotely" — nothing invented, nothing plain either, which is what the configured model had said the day before under the mismatched company). The rerun with the line could not be made: gpt-oss-120b's own day ran out mid-batch, the second organisation's key in `.env` answers 401, and gpt-oss-20b as a bot spends its 400-token cap on reasoning (its greeting was "Hi"). So the line is deterministic-only until a capable model has budget — `unknown_question` (SAP TM, ISO 27001, SOC 2 from the handbook, nothing invented) is the proven half of personalisation. `meeting`: the model-driven scenario reached `book_meeting` on gpt-oss-120b with the right Monday and the right slot, and the call was refused by Groq's schema validation because the model sent `attendee_email: null` (the configured model has never done this; its own run the day before reached the same point and was refused only for the missing email). The path from there was proven without a model, through the same wrapper and the same conversation layer `bot.py` builds: `check_availability("2026-09-14")` → six real Cal.com slots → `book_meeting("2026-09-14T09:00")` → `success: true`, Cal.com reference `sXb4mj1GA45KFuH4yaC3Yr`, and row 3 in `meetings` (provider calcom, BOOKED, attendee Sarah Khan). The attendee had to be the Cal.com account owner's own address: Cal.com refuses `example.com` (HTTP 400 `email_domain_cannot_receive_mail`), which is why the wrapper lets a shell `DEV_PROSPECT_EMAIL` win.
+Two substitute-model artefacts, not product faults, are worth knowing:
+gpt-oss sends `null` for optional string tool arguments and Groq's schema
+validation rejects the whole call (`record_discovery` on a greeting turn,
+`book_meeting` with `attendee_email: null`), and it once read "Monday" as
+a Sunday; qwen3.8 has done neither. Also the harness writes its debug log
+with the console code page — `PYTHONUTF8=1` on every run, or a
+non-breaking hyphen in a reply kills the suite.
+
+- `uv run validate.py`, 18:19 local, after the runs above: **25 scripts, 3,794 checks passed, 11 warnings, one failed finding — `test_production` check 4** ("the worker selected and reserved the first due prospect by itself": `TickReport(placed=0, next_due_at=2026-09-11 04:00 UTC)`). Re-run alone it fails the same way; the test's own guard window is all day UTC, and the next due time it reports is 09:00 Asia/Karachi the next morning — the prospects it imports fall under the deployment's calling-hours policy, which had closed at 18:00 local. The same check passed in this morning's run (3,847 checks). Nothing in this follow-up touches the worker, the store or the policy; run it inside calling hours to see it pass.
+
+**Run next, when the budget resets** (`SESSION_IDLE_TIMEOUT_SECS=3600
+USER_IDLE_TIMEOUT_SECS=120 uv run python -m pipecat.evals suite
+evals/sales/suite.yaml -c 1 --base-port 7911 -d`; ports 7895 and 7900 are
+taken by the scheduler and the application on this machine): the five
+unrun text scenarios, `not_interested`, `price_objection`,
+`unrelated_question` with `-r 2`, then `evals/suite.yaml`'s `conversation`
+and `barge_in` and `evals/sales/interruption.yaml` for the audio path. A
+judge on a model with its own budget (`openai/gpt-oss-20b` is on this
+account) would halve what a run costs.
 
 **Not done, on purpose.** No new API route (the live agent's in-call state
 and a bot reachability probe would each need one). No agent filter on
@@ -2787,9 +4230,10 @@ will call `CampaignService`, not this file.
 
 ## 4. Pending tasks
 
-Nothing is half-finished. Phase 16 is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
+Nothing is half-finished. Phase 27 (both parts) is complete as specified. What follows is *not started*, and most of it is deliberately deferred:
 
-- **Phase 27 scope** — not specified. Do not guess and start building.
+- **Five eval runs are still owed on the configured model** (its 200,000-token day ran out at 13:01 on 2026-09-11): `send_information` and `not_interested` with this session's fixes, `unknown_question`, `price_objection` turn 3, and the audio scenarios. The Phase 27 follow-up section has the commands; keep the judge on `EVAL_JUDGE_MODEL=openai/gpt-oss-20b` and leave a minute between runs.
+- **Phase 28 scope** — not specified. Do not guess and start building.
 - **The application has now been walked in a real browser** (Phase 26, Playwright over the installed Chrome); the remaining UI gaps are listed at the end of the Phase 26 section (no in-call state on the live page without a new route; no analytics agent filter; the calls page's qualification / meeting filters are client-side).
 - **The engine dials whenever `app.py` is up and a campaign is `ACTIVE`.** That is the phase's point, and it is also the first thing to remember on a machine with real carrier credentials: `uv run app.py --no-engine` (or `WORKER_EMBEDDED=false`) serves the page without dialling.
 - **Seen on the Phase 25 live call, not fixed (the pipeline is out of scope):** the Groq model spoke its own reasoning aloud once ("I need to figure out which day next week refers to. Today is Tuesday…") and then "I've stopped." — a reasoning-mode leak from `qwen/qwen3.8-27b` into the spoken reply; the transcript records it faithfully. Worth a look with the TTS credential and the Groq throttling before real use.
@@ -3124,6 +4568,92 @@ Phase 6 answered the product question that kept those two open: the agent is a s
 ---
 
 ## 6. Decisions made during development
+
+### Phase 29
+
+- **A fourth observer, not a fourth system.** The tracker uses the observer
+  mechanism the three existing ones use, numbers turns the way `TurnMonitor`
+  does, logs under the same call context, and puts its record inside the
+  call report's existing `latency` dict. It was not folded into
+  `TurnMonitor` because that class answers a different question (did the
+  turn get a response, was the interruption real) and its report shape is
+  read by the dashboard; a sibling keeps both small.
+- **Frame time, not service time, for the headline figures.** A service's
+  own TTFB (from `MetricsFrame`) excludes queuing before and after it; the
+  frame-to-frame figure is what the caller waits. Both are recorded, and the
+  difference is itself diagnostic.
+- **The anchor is a frame, and the line says which.** Pipecat's observer
+  subtracts the VAD's `stop_secs`; this one does not, because there is no VAD
+  on the Flux path and a corrected number that names no frame cannot be
+  reconciled with a log. `metrics.py` keeps reporting the corrected one.
+- **Retrieval is told, tools are watched.** Retrieval happens inside one
+  processor with no frame marking its start, so two calls in `retrieval.py`
+  were the only way; tools already produce start and result frames with a
+  call id, so nothing in `toolkit.py` changed.
+- **Nothing optimised.** The brief asked for a baseline. What the baseline
+  already shows on this machine — Groq's free-tier retry waits inside TTFT,
+  the ElevenLabs 401 — is recorded in the section, not acted on.
+
+### Phase 28
+
+- **The facts go in the system instruction, not in a per-turn block and
+  not in the knowledge base.** They are small, they never change during a
+  call, and the failure was precisely that a per-turn block outranked them;
+  a system-instruction section the knowledge blocks *refer to* is the one
+  place the model reads them on every request with no retrieval in the path.
+  A pgvector row for "what we do" would have reintroduced the dependency on
+  the search finding it.
+- **The knowledge blocks were reworded rather than suppressed.** Skipping
+  retrieval for "basic" questions would have needed a classifier that
+  cannot be right, and the block still has to forbid guessing on detail. It
+  now says "answer from the facts in your instructions if they cover it";
+  the refusal wording for what neither holds is unchanged.
+- **Isolation by company name, not by a flag.** A campaign that names a
+  different company than the environment's is, by definition, a different
+  business; inheriting the environment's description would describe the
+  wrong one. Comparing the two names is deterministic and needs no schema.
+  Applied to the two new fields only (see *Observed, not changed* above).
+- **No frontend change.** The wizard's agent-profile step has no fields for
+  the two keys; the route accepts them and a campaign can set them through
+  the API, while the deployment's `.env` covers the common case. Adding the
+  two fields to `web/app.js` is a follow-up if operators need it per
+  campaign.
+
+### Phase 27 follow-up
+
+- **A tool result repeats what the turn's override said.** Overrides are
+  consumed by one inference; a reply written after a tool call is a second
+  inference and sees only the tool result. Anything the reply must do has
+  to be in the result. `TOOL_GUIDANCE["send_information"]` is the first
+  kind-specific objection result; the generic line stays for the rest.
+- **Model plus detector agreeing on a no is a no.** `record_objection
+  (NOT_INTERESTED)` alone is handled as an objection (the model may be
+  loose with the kind); `REJECTION` heard alone only raises the hedged
+  override. Both together take the `set_interest` path. The state machine,
+  the record and the hang-up are unchanged — only the entry point widened.
+- **The judge must not touch the harness's environment.** The harness is
+  the bots' parent; whatever it loads, they inherit. Read the key from the
+  file.
+- **The judge's model is a shell choice, not a scenario edit.** The
+  scenarios say what to judge; which Groq model has budget today is an
+  operational fact. `EVAL_JUDGE_MODEL` / `EVAL_JUDGE_MAX_TOKENS`, scenario
+  `model` still wins, defaults unchanged.
+
+### Phase 27, second part
+
+- **Pending means no session at all, not a session with fewer rights.** A pending operator could have been signed in as a viewer meanwhile, but that is a second code path through the login and the token; refusing the login — only after the password matched, so a guess learns nothing — keeps Phase 18's login the one path and satisfies "must not access the application as an Operator" trivially.
+- **The server decides the status from the role; the client's word buys nothing.** Viewer is the only role a sign-up can hold at once. The two-status model (`active` / `pending`) is the whole state machine; a rejected request is deleted rather than kept as a third status, so the person can sign up again as a viewer and nobody is locked out with no page to fix it.
+- **Approval is the existing `manage` permission, on the application's own routes.** No new role, no new permission, no change to `ROLE_PERMISSIONS`; a viewer or operator gets the same 403 every other manage-only route gives.
+- **The login re-reads a registered row every time.** One cheap SELECT per login buys correctness across processes and after a restart; the environment users are never re-read, so their behaviour is exactly Phase 18's.
+- **`DASHBOARD_REGISTRATION_ROLE` removed.** A knob that could make an operator active without approval contradicts the brief; the default-role choice now belongs to the person signing up, and the approval to the admin.
+
+### Phase 27
+
+- **A table for sign-ups; the environment for everyone else.** Phase 18's *users in the environment, not in a table* was about secrets and this repository; a person typing a form cannot edit `.env`, and a server writing `.env` would be worse than a table. `DASHBOARD_USERS` is unchanged, is never copied into the table, and an entry there always wins over a row — so a sign-up cannot shadow the admin.
+- **One directory, fed from two sources, and the login untouched.** Rather than a second authentication path, `UserDirectory.add()` takes a row in and the login's constant-time `authenticate` stays the one check. The lookup happens *at login* (`load_registered_user`), not at startup, so a process that was already running sees a user registered elsewhere without a restart.
+- **Viewer by default, operator by choice, admin never** *(first part; superseded by the second part: any role may be requested, and operator and admin wait for an admin's approval).*
+- **The page repeats the rules; the server owns them.** `validate_registration` is the truth; the form's own checks exist so a slip is pointed out before a request, and the server's `fields` map lands under the same inputs when it disagrees.
+- **The same rate limit as the login, and same-site only.** Sign-ups are an unauthenticated write; `SECURITY_LOGIN_RATE_LIMIT` per address and `origin_allowed` are the two Phase 18 belts, reused. The API-key path cannot register.
 
 Each of these has a reason. Reversing one without the reason is how this regresses.
 
@@ -4310,6 +5840,21 @@ Verify these before relying on them; each was true on 2026-09-02 on this machine
 
 ## 8. Files and modules modified
 
+### Modified in Phase 33
+
+- `server/web/styles.css` — rewritten: tokens, light + dark themes, motion system, the new components.
+- `server/web/index.html` — the shell (nav indicator, theme toggle, new icons), the Google Fonts links removed.
+- `server/web/app.js` — motion helpers, theme, split-screen auth, hero, KPI icons, campaign cards, donut, page eyebrows, transcript avatar, Live pipeline; the Live page frames the client with the current theme and the toggle posts it to the frame.
+- `server/bot.py` — `install_client_theme(app, …)` before `main()`.
+- `server/validate.py` — `test_client_theme` listed.
+
+### New in Phase 33
+
+- `server/web/fonts/inter-latin.woff2`, `server/web/fonts/inter-latin-ext.woff2` — Inter variable, served under `/static/fonts/`.
+- `server/src/client_theme.py` — the bot's browser client served in the application's design (`install_client_theme`).
+- `server/web/client-theme.css` — the playground's tokens remapped to the application's palette, light and dark, plus Inter.
+- `server/tests/test_client_theme.py` — 44 checks (listed in `validate.py`).
+
 ### New in Phase 2
 
 | Path | Purpose |
@@ -4347,6 +5892,58 @@ Verify these before relying on them; each was true on 2026-09-02 on this machine
 | `server/tests/fake_carrier.py` | Simulates a carrier against a running bot; no account, no tunnel, no money |
 | `server/tests/fake_browser.py` | Simulates the *browser* against a running bot, including the drop-and-reconnect that nothing else covers |
 | `server/tests/test_realtime.py` | 19 deterministic checks: echo suppression and the peer watchdog |
+
+### Modified in the Phase 27 follow-up
+
+- `server/src/conversation/playbook.py` — `TOOL_GUIDANCE["send_information"]`.
+- `server/src/conversation/tools.py` — `record_objection` picks the guidance by kind and by whether the state moved; result data gains `stopped_selling`; imports `ObjectionKind`.
+- `server/src/conversation/conversation.py` — `_turn_signals` (set in `note_user_turn`); `record_objection` takes a `NOT_INTERESTED` filed on a heard `REJECTION` through `set_interest`.
+- `server/tests/test_conversation.py` — scenario 6 reads the tool result; scenario 2 gains the filed-no pair (324 checks).
+- `server/evals/groq_judge.py` — `dotenv_values` instead of `load_dotenv`; `EVAL_JUDGE_MODEL`, `EVAL_JUDGE_MAX_TOKENS`, `_GroqJudge`.
+- `server/evals/README.md` — the judge-budget paragraph; this file.
+
+### Modified in Phase 27, second part
+
+- `server/src/campaigns/store.py` — `dashboard_users.status/decided_by/decided_at` (+ `ADD COLUMN IF NOT EXISTS`), `DashboardUser.status/.public()`, `add_dashboard_user(status=)`, `list_dashboard_users`, `decide_dashboard_user`.
+- `server/src/security/roles.py` — `User.status/.active`, `UserDirectory.update/remove`, `USER_ACTIVE`, `USER_PENDING`; `__init__.py` exports.
+- `server/src/config.py` — `registration_role` / `DASHBOARD_REGISTRATION_ROLE` removed.
+- `server/src/dashboard/web.py` — `load_registered_user` re-reads; the login's pending refusal.
+- `server/src/app/server.py` — `RegisterIn.role`, the status decision, `GET /api/app/users/pending`, `POST /api/app/users/{id}/approve|reject`.
+- `server/web/app.js` — the role select, the pending notice and refusal, the Sign-up requests card on Settings.
+- `server/tests/test_app.py` — `check_registration` rewritten (136 checks in all); `server/tests/test_automation.py` — the fake store's `status`, `list_dashboard_users`, `decide_dashboard_user`.
+- `server/.env.example`, `README.md`, `SECURITY.md`, this file.
+
+### New in Phase 27
+
+- Nothing new on disk except the table; every change is in an existing file.
+
+### Modified in Phase 27
+
+- `server/src/security/roles.py` — `User.email`, `UserDirectory.add/has_email`, `get` by email, `is_user_name`, `is_email`, `validate_registration`, `NAME_RULE`, `PASSWORD_RULE`, `MAX_EMAIL_LENGTH`; `server/src/security/__init__.py` — the exports.
+- `server/src/campaigns/store.py` — `DASHBOARD_USERS_TABLE`, the DDL in `create_schema`, `DashboardUser`, `DuplicateUserError`, `add_dashboard_user`, `get_dashboard_user`.
+- `server/src/config.py` — `SecurityConfig.registration_enabled`, `registration_role`; `describe()`.
+- `server/src/dashboard/web.py` — `user_from_row`, `load_registered_user`; one lookup line in the login route.
+- `server/src/app/server.py` — `RegisterIn`, `GET/POST /api/app/register`.
+- `server/web/app.js` — `renderSignedOut`, `loadRegistration`, `showFieldErrors`, `renderRegister`; the login's link and notice. `server/web/styles.css` — three rules.
+- `server/tests/test_app.py` — `check_registration` (33 checks; `build()` takes `registration`, `registration_role`, `store`, `login_rate`). `server/tests/test_automation.py` — `FakeStore.add_dashboard_user`, `get_dashboard_user`.
+- `server/.env.example` — `DASHBOARD_REGISTRATION_ENABLED`, `DASHBOARD_REGISTRATION_ROLE`. `README.md`, `SECURITY.md`, this file.
+
+### New in Phase 26, second part
+
+- `server/src/spoken_text.py` — `SpokenTextScrubber`, `SpokenTextFilter`.
+- `server/tests/test_spoken_text.py` — the 25th check script.
+- `server/evals/sales/introduction.yaml`.
+
+### Modified in Phase 26, second part
+
+- `server/src/services.py` — `reasoning_extra`, `_forward_provider_retries`; `make_llm` applies both.
+- `server/src/config.py` — `REASONING_FORMATS`, `llm_reasoning_format` (`LLM_REASONING_FORMAT`).
+- `server/bot.py` — `SpokenTextFilter()` between the LLM and the TTS.
+- `server/src/conversation/playbook.py` — the opening says it is an AI assistant; the apology-first conduct line.
+- `server/tests/test_compliance.py` — the plain-opening check.
+- `server/validate.py` — registers `test_spoken_text`.
+- `server/evals/sales/` — `suite.yaml`; judge criteria of `unknown_question`, `unrelated_question`, `price_objection`; `not_interested` reshaped; `within_ms` in nine scenarios.
+- `server/.env.example` — `LLM_REASONING_FORMAT`. `README.md`, this file.
 
 ### Modified in Phase 26 (frontend only)
 
@@ -6917,7 +8514,7 @@ the call.
 - **Retrying `place_call` on a 5xx (Phase 9).** A 5xx is a server error, so the request "obviously" failed. It is not obvious at all: the carrier may have created the call and failed while answering. Treated as ambiguous with everything else.
 - **`ProcessorUnusablePolicy.END` instead of the supervisor (Phase 9).** Pipecat can end the pipeline itself when a processor reports it can no longer work. Rejected because it ends the call *immediately* and silently: no goodbye, no distinction between a stage the agent needs to speak and one it does not, and no count of how many failures preceded it. The supervisor does all three, and the default `CONTINUE` leaves it in charge.
 - **A distinct `Disposition` for a call the supervisor ended (Phase 9).** It would read well in a CRM. Rejected for this phase: it changes Phase 8's closed vocabulary and its validation rules for a case that is already recorded — a note on the result and a reason in the log. Worth revisiting if supervised endings turn out to be common, which would itself be the more interesting finding.
-- **Advertising fewer tools per turn (Phase 11, reconsidered and rejected again).** Phase 7 deferred it and listed it as Phase 8's third-ranked item; Phase 11 measured what it is worth and read the source to decide. It is worth 300–500 tokens of a 3,394-token request, 10–15%. It is still not safe: `LLMService.process_frame` calls `_sync_registered_tool_handlers(frame.context.tools)` on **every** `LLMContextFrame`, and that unregisters any auto-registered handler the frame does not advertise. A stage-filtered list would therefore register and unregister handlers around every inference, in the layer that carries `mark_do_not_call`. The prize is 12% of a prompt; the risk is a tool handler missing at the moment it is called. Revisit only with `LLMSetToolsFrame` and a test that drives the unregister race directly.
+- **Done in Phase 31, safely:** the race below is avoided by registering every handler explicitly (never pruned) and advertising handler-less schema copies; `tests/test_tool_advertising.py` drives the prune directly on a real service. Kept for the record: **Advertising fewer tools per turn (Phase 11, reconsidered and rejected again).** Phase 7 deferred it and listed it as Phase 8's third-ranked item; Phase 11 measured what it is worth and read the source to decide. It is worth 300–500 tokens of a 3,394-token request, 10–15%. It is still not safe: `LLMService.process_frame` calls `_sync_registered_tool_handlers(frame.context.tools)` on **every** `LLMContextFrame`, and that unregisters any auto-registered handler the frame does not advertise. A stage-filtered list would therefore register and unregister handlers around every inference, in the layer that carries `mark_do_not_call`. The prize is 12% of a prompt; the risk is a tool handler missing at the moment it is called. Revisit only with `LLMSetToolsFrame` and a test that drives the unregister race directly.
 - **Replacing a provider for speed (Phase 11).** Explicitly out of scope, and the measurement agrees: the dominant latency is turn detection at 653 ms, which is Deepgram's own tuned default, and the dominant cost is prompt size rather than per-token price.
 - **Caching embeddings per turn (Phase 11).** Retrieval was a suspect before it was measured. It is 29 ms of a ~1,300 ms turn — 2% — and a cache would add a correctness question (a stale embedding for an edited turn) to save nothing anybody can hear.
 - **A materialised view for the dashboard aggregates (Phase 11).** The textbook fix for a slow aggregate. Rejected: it needs a refresh schedule, which is the analytics infrastructure Phase 10 was told not to add, and it trades freshness for speed the cache already provides without either.
@@ -7451,6 +9048,96 @@ Three smaller ones from the same session, recorded so nobody repeats them:
 - **A shell heredoc that starts with Python is intercepted on this
   machine** ("Ctrl click to launch VS Code Native REPL"); write patch
   scripts to a file and run the file.
+
+### 49. Relying on the turn's override to shape a reply written after a tool call (Phase 27 follow-up)
+
+**Tried:** the `SEND_INFORMATION` override — "say a colleague will send it
+over… never say that anything has been sent" — placed in front of the model
+as `[call guidance]`, with the generic objection line as the tool result.
+
+**What happened:** the override was in the request that produced the
+`record_objection` call and absent from the request that produced the
+reply (an override is consumed by one inference, by design), so the reply
+was written from the generic tool result and qwen3.8 talked the caller out
+of the email: "I'd rather not waste your time with a generic email." The
+detector's record was right; the voice was wrong.
+
+**What works:** the tool result says it again, per kind. Read the bot log's
+`Generating chat from context` line for the *second* request of a tool turn
+before assuming an instruction reached the reply.
+
+### 48. Loading `.env` in the eval judge (Phase 27 follow-up)
+
+**Tried:** `load_dotenv(server/.env)` at the top of `evals/groq_judge.py`,
+so the judge could find `GROQ_API_KEY` in the harness process.
+
+**What happened:** the harness spawns the bots and is first asked to judge
+after the first bot's greeting. From that moment its environment held every
+`.env` value, every later bot inherited them, and `evals/eval_env.py` —
+which lets a sample variable already in the shell beat `.env.example`, on
+purpose — kept the deployment's `SALES_*`. With `-r 2` the first attempt
+introduced Meridian and the second Hashmaker Solutions, against Meridian's
+handbook and Meridian's judge criteria. Nothing in the logs says why; only
+`grep -c Meridian` on the two bot logs did.
+
+**What works:** `dotenv_values(ENV_FILE).get("GROQ_API_KEY")` — the value,
+not the environment. A subprocess's parent must not load a file it does not
+mean to pass on.
+
+### 47. Telling the model to hang up (Phase 26)
+
+**Tried:** sharpening the tool-result guidance after `set_interest` —
+"say goodbye, and call end_call in this same turn so the call ends after
+your goodbye" — and after `mark_do_not_call`.
+
+**What happened:** the goodbye came every time; `end_call` came with it in
+one run of three on the configured model and in none of three on
+gpt-oss-120b. The other runs ended at the idle nudge two minutes later,
+and the second nudge got a second "Goodbye." that the judge failed. An
+instruction is not a guarantee, and a hang-up is the one thing a caller
+who has said no notices most.
+
+**What works:** the conversation decides. `closing_line_needs_hangup`
+(a spoken, uninterrupted, non-question reply in a rejection state with
+`end_call` not yet run) and `bot.py` queues the `EndWorkerFrame` itself
+after the goodbye has played. The tool stays for the model that does call
+it; the two cannot double-end because the tool sets `_end_requested`.
+The eval could not see this at first either: the harness disconnects the
+moment its last expectation passes, so the goodbye was interrupted and the
+hang-up never ran — `not_interested.yaml` now ends with an 8 s
+observation-only turn.
+
+### 46. Building a new text frame without the response's skip-TTS flag (Phase 26)
+
+**Tried:** holding the model's whole reply in the spoken-text stage and
+releasing it as one fresh `LLMTextFrame` before the `LLMFullResponseEndFrame`.
+
+**What happened:** in text-mode evals the harness asks for no voice by
+marking every LLM frame `skip_tts=True`. The fresh frame carried no flag, so
+the TTS synthesised it sentence by sentence — but the end frame still
+carried the flag, the TTS passed it through without flushing its
+aggregator, and the last sentence of every reply (the one waiting for
+lookahead) was never synthesised. Real calls carry no flag and were
+unaffected, which is why a bare pipeline with the real Cartesia service
+reproduced nothing and the audio runs kept every sentence.
+
+**What works:** the released frame takes `skip_tts` from the end frame.
+`tests/test_spoken_text.py` pins it.
+
+### 45. Passing a provider parameter as a keyword argument (Phase 26)
+
+**Tried:** `Settings(extra={"reasoning_format": "hidden"})`, on the strength
+of Pipecat merging `Settings.extra` into the request parameters.
+
+**What happened:** Pipecat merges it into the *keyword arguments* of
+`chat.completions.create()`, and the OpenAI SDK refuses a name it does not
+know — `AsyncCompletions.create() got an unexpected keyword argument
+'reasoning_format'` — on every request, so every scenario bot was dead on
+arrival with a supervisor line that looked like a provider outage.
+
+**What works:** `Settings(extra={"extra_body": {"reasoning_format":
+"hidden"}})`. The SDK sends `extra_body` through untouched. The check
+script pins the shape.
 
 ### 44. Taking the first line of an exception's message (Phase 24 audit)
 

@@ -55,6 +55,15 @@ cd server
 uv run security.py hash-password --user alice --role admin
 uv run security.py hash-password --user sam --role viewer
 #   DASHBOARD_USERS=alice:admin:scrypt$...,sam:viewer:scrypt$...
+# Phase 27: people can also sign up on the application's Register page
+# (/app/#/register): a dashboard_users row with the same scrypt hash and the
+# same login, the same rate limit per address, every sign-up on the audit
+# log (auth.registered). A Viewer is active at once; an Operator or Admin
+# request is `pending` — it cannot sign in — until an admin (the `manage`
+# permission) approves or rejects it on Settings → Sign-up requests
+# (auth.signup_approved / auth.signup_rejected). The role in the request
+# body never grants anything by itself. DASHBOARD_REGISTRATION_ENABLED=false
+# closes the page. A DASHBOARD_USERS name or email cannot be taken.
 
 # Sessions survive a restart (and are shared by two processes) only with a fixed secret.
 uv run security.py make-secret

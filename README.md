@@ -176,6 +176,68 @@ websocket.
 Two failures show up the first time you test on a laptop, and neither is
 obvious from the logs.
 
+### One request per recording turn (Phase 32)
+
+A tool call normally costs two LLM requests: the model calls, the result
+goes into the context, the model is run again to speak. For the five
+recording tools — `record_discovery`, `set_interest`, `record_objection`,
+`move_to_stage`, `request_meeting` — the result changes nothing the caller
+needs to hear, so when the model has already spoken its reply in the same
+response as the call, that reply is the turn and the second request is
+skipped. It is skipped only then: a call made without speaking, two calls
+in one response, a no that has to be closed, a failure, all run the second
+request as before. The tools that act on the world — the calendar, the
+booking, the callback, the knowledge search, the do-not-call, the transfer,
+`end_call` — always wait for their result before the model may claim
+anything. Nothing about what is recorded or when it is written changed.
+
+### What the model reads per request (Phase 31)
+
+`uv run python scripts/prompt_tokens.py` (add `--deployment` for the campaign
+in `.env`) counts what every LLM request carries, with the Qwen3 tokenizer
+when it is cached: the system instruction section by section, each tool
+schema, and the set advertised at each stage. Since Phase 31 the twelve tool
+schemas are not all sent on every request: none on the opening, the recording
+tools plus what the stage can act on while selling, and only the closing
+tools once the call is ending. Every handler stays registered for the whole
+call, so a tool the model calls while it is not in view still runs. The
+system instruction says each rule once; the per-turn guidance and the tool
+results say it again at the moment it applies, which is where a small model
+acts on it.
+
+### The voice stops (Phase 30: the TTS fallback)
+
+A TTS provider that stops synthesising — Cartesia answering HTTP 402 when
+the account's credits are gone, a websocket that will not connect, a
+timeout — used to leave the caller in silence until the supervisor ended
+the call. With a second provider on standby the call carries on:
+
+```
+TTS_PROVIDER=cartesia
+TTS_FALLBACK_ENABLED=true
+TTS_FALLBACK_PROVIDER=elevenlabs     # with ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID
+```
+
+Both services start with the call. The first time the primary reports a
+provider failure (anything but a failure of the application's own code)
+it is retired for the rest of that call: the sentence it was asked for is
+spoken once by the fallback if the primary produced no audio for it,
+the rest of the response is handed over sentence by sentence, and from the
+next response on the fallback is spoken to directly. Nothing is spoken
+twice, nothing switches back, and the next call starts on the primary
+again. The log says so:
+
+```
+TTS FALLBACK | tts.fallback.engaged | primary=CartesiaTTSService#0 fallback=ElevenLabsTTSService#0 category=quota error=... respoken=1 deferred=True after_ms=8412
+TTS FALLBACK | tts.fallback.active | fallback=ElevenLabsTTSService#0 reason=response finished after_ms=11530 respoken=1 handed_over=2
+TTS FALLBACK | CartesiaTTSService#0 -> ElevenLabsTTSService#0 after 8.41s (quota); 1 re-spoken, 2 handed over; state=fallback
+```
+
+`uv run health.py tts tts_fallback` checks both keys without synthesising
+anything. Leave the fallback off when `TTS_PROVIDER` already names the only
+provider you want. See `server/src/tts_fallback.py` for where the switch
+happens and why it waits for the end of the response.
+
 ### It talks to itself
 
 You hear the agent answer a question nobody asked, and the transcript has the
@@ -551,7 +613,18 @@ SALES_COMPANY_NAME=Meridian Fleet Systems
 SALES_OFFER=fleet tracking that cuts fuel spend and shows where every vehicle is
 SALES_VALUE_POINTS=Customers typically cut fuel spend by around a tenth.|It installs in under an hour per vehicle.
 SALES_MEETING_ASK=a fifteen minute call with a specialist later this week
+SALES_COMPANY_DESCRIPTION=Meridian Fleet Systems builds fleet management software for mid-sized logistics operators.
+SALES_SERVICES=live vehicle tracking|route planning|maintenance scheduling
 ```
+
+The last two are the **always-available campaign context**: the agent answers
+"who are you?", "what does your company do?" and "what services do you offer?"
+from them directly, in the system instruction, without a knowledge base
+lookup — so a retrieval that happens to miss no longer makes it say it has no
+information about its own company. Detail stays in the knowledge base. A
+campaign's `configuration` can carry its own `company_description` and
+`services`, and a campaign that names a *different* `company_name` inherits
+neither from the environment.
 
 **Every one of those is optional, and leaving one out does not produce a
 placeholder — it produces a restriction.** With no `SALES_COMPANY_NAME` the
@@ -843,7 +916,8 @@ both.
 A browser session carries none of that and the agent is anonymous, which is
 correct and is *stated* in the prompt rather than hidden: it is told, by name,
 which fields it does not have, and told to ask rather than guess. Set
-`DEV_PROSPECT_*` in `.env` to test personalisation without a database. Those are
+`DEV_PROSPECT_*` in `.env` to test personalisation without a database
+(`DEV_PROSPECT_EMAIL` gives a Cal.com booking its attendee). Those are
 used only when a call carries no prospect id — a campaign call whose prospect
 cannot be found stays anonymous rather than being told it is talking to whoever
 `.env` last described.
@@ -861,6 +935,29 @@ The fields are `k=v` (Phase 12) so one stage can be grepped across a whole
 run, and they land as keys under `LOG_FORMAT=json`. On a phone call the same
 figures, per response and as percentiles, go into the call's report — see
 [Real-line voice quality](#real-line-voice-quality-and-voicemail-phase-12).
+
+Phase 29 adds the breakdown *inside* that total — where a slow turn spent its
+time. Every turn logs two more lines, one for a person and one for `grep`:
+
+```
+LATENCY | TURN 4 | STT final 0.35s | KB retrieval 0.21s (4 passages) | LLM TTFT 1.42s | LLM total 2.31s | tool 0.08s (record_discovery 0.08s) | TTS TTFA 0.39s | TOTAL end-of-user-speech -> first-audio 2.11s
+LATENCY | turn.breakdown | turn=4 kind=response outcome=responded stt_final_ms=350 kb_ms=210 turn_end_to_llm_ms=290 llm_ttft_ms=1420 llm_total_ms=2310 llm_requests=2 tool_ms=80 tools=record_discovery first_token_to_tts_ms=60 tts_ttfa_ms=390 tts_audio_to_played_ms=20 total_ms=2110
+```
+
+and the call ends with `LATENCY CALL SUMMARY`: the average of every stage
+over the caller's turns and the p95 and max of the total. `stt_final` is end
+of the caller's speech (the VAD's stop, else the end-of-turn decision) to the
+final transcript; `kb` is the retrieval stage; `llm_ttft` runs from the first
+LLM request of the turn to its first token, which on a tool turn spans the
+tool and the second request; `tts_ttfa` is the TTS request to its first chunk;
+`total` is end of speech to the output transport reporting the bot speaking.
+The gaps between stages (`turn_end_to_llm_ms`, `first_token_to_tts_ms`,
+`tts_audio_to_played_ms`) are pipeline time no service measures. A turn that
+was interrupted, hit an error or never produced audio says so in `outcome`;
+the greeting and any reply nobody prompted (an idle nudge) are turns of their
+own kind and stay out of the averages. The same record goes into the call
+report under `latency.turns`. Nothing in these lines is text the caller said,
+a tool's arguments or a result — stage names, tool names and milliseconds.
 
 - **total** — from the moment you actually fell silent to the first audio out of
   the agent. The only number you experience.
@@ -1618,10 +1715,21 @@ origin, sharing one session cookie, so one login reaches every part.
 ```bash
 uv run bot.py                          # terminal 1 — the voice agent, unchanged
 uv run app.py --with-scheduler         # terminal 2 — http://127.0.0.1:7900/app/ ; dials ACTIVE campaigns
-uv run python tests/test_app.py        # 68 checks
+uv run python tests/test_app.py        # 136 checks
+uv run python tests/test_spoken_text.py # Phase 26: reasoning and machine text never reach the voice
 ```
 
-Sign in with a `DASHBOARD_USERS` account; on a loopback development machine
+Sign in with a `DASHBOARD_USERS` account, or create one on the application's
+**Register page** (the *Create one* link under the login, or `/app/#/register`;
+Phase 27): name, email, role, password, confirm. A sign-up becomes a row of
+the `dashboard_users` table — run `uv run campaign.py init` once to add it —
+with the same scrypt hash as `DASHBOARD_USERS`, and signs in through the same
+login by name or by email. A **Viewer** is active at once. An **Operator** or
+**Admin** request is *pending*: it cannot sign in until an admin approves it
+under *Settings → Sign-up requests* (approve as the role asked for, or
+reject), and the role the browser sends never grants anything by itself.
+`DASHBOARD_REGISTRATION_ENABLED=false` closes the page. Hand-configured
+`DASHBOARD_USERS` entries are untouched and cannot be taken by a sign-up. On a loopback development machine
 `DASHBOARD_AUTH_DISABLED=true` skips the login (an operator, so no admin
 actions). `APP_HOST`, `APP_PORT` (7900) and `APP_BOT_URL` are the only new
 variables. The separate `dashboard.py` and `automation.py` servers still
@@ -1724,6 +1832,36 @@ the Phase 24/25 one; nothing underneath changed.
 Nothing in the browser talks to anything but its own origin; the icon set
 is inline SVG because the content-security policy allows no CDN.
 
+## What the caller may hear (Phase 26, second part)
+
+Two things were found on the first real conversation with the bot and are
+now closed off:
+
+* **The model's reasoning never reaches the voice.** A reasoning model on
+  Groq (`qwen3`, `gpt-oss`) with tools advertised writes its thinking into
+  the answer channel by default, and the caller heard it ("I need to figure
+  out which day next week refers to…"). The bot now asks Groq for the
+  answer only (`LLM_REASONING_FORMAT=hidden`, the default; `parsed` or
+  `off` if a provider rejects it), and a stage between the LLM and the TTS
+  (`src/spoken_text.py`) drops tagged reasoning, tool markup a model emits
+  as text, special tokens, and sentences with no words in them — the empty
+  sentence Cartesia refused three times and the supervisor read as a dead
+  voice. The stage holds a reply until the model has finished it, so a
+  closing tag that arrives late discards the draft before it is synthesised
+  (a few hundred milliseconds of generation time on Groq; the first token's
+  wait, which dominates, is unchanged). What was removed is counted on the
+  log, never spoken and never reconstructed. `uv run python
+  tests/test_spoken_text.py` is the regression check.
+* **The opening says what it is.** The agent's first sentence gives its
+  name, says plainly that it is an AI assistant, and names the company —
+  whether or not a compliance policy requires particular words. It also
+  apologises first when somebody is annoyed at being called at all.
+
+The 40–60 s silences seen on the free Groq tier are the provider's
+per-minute token limit and the SDK's retry wait, not the bot; they are now
+named on the log (`LLM | the provider refused the request and the SDK is
+waiting to retry …`) so a quiet turn can be read for what it is.
+
 ## Production dashboard and analytics (Phase 20)
 
 The Phase 10 dashboard (`uv run dashboard.py`, `http://127.0.0.1:7870`,
@@ -1817,10 +1955,13 @@ customer data, so from Phase 18 each has a door on it. **`SECURITY.md` is the
 reference**; this is the short version.
 
 * **The dashboard needs a login.** Users live in `DASHBOARD_USERS` as
-  `name:role:hash` (`uv run security.py hash-password` makes the hash); the
-  session is a signed, HttpOnly, SameSite=Strict cookie. It refuses to start
-  with nobody configured; `DASHBOARD_AUTH_DISABLED=true` restores the old
-  login-free page for loopback only.
+  `name:role:hash` (`uv run security.py hash-password` makes the hash), and,
+  since Phase 27, in the `dashboard_users` table for people who sign up on
+  the application's Register page (same hash, same login; a viewer at once,
+  an operator or admin only once an admin approves the request);
+  the session is a signed, HttpOnly, SameSite=Strict cookie. It refuses to
+  start with nobody configured; `DASHBOARD_AUTH_DISABLED=true` restores the
+  old login-free page for loopback only.
 * **Three roles.** A *viewer* sees totals and outcomes with phone numbers
   masked and transcripts withheld; an *operator* runs campaigns and sees the
   people; an *admin* also closes campaigns, retries the outbox and reads the
@@ -2017,9 +2158,9 @@ so "why does it wait that long before answering" has one file to read
 
 ### Swapping the LLM
 
-`LLM_PROVIDER` accepts `groq`, `anthropic`, `openai`, `cerebras`, `openrouter`,
-`mistral` and `ollama` — all work with the packages already installed, no extra
-needed. Set the matching `<PROVIDER>_API_KEY` and optionally `<PROVIDER>_MODEL`.
+`LLM_PROVIDER` accepts `groq`, `gemini`, `anthropic`, `openai`, `cerebras`,
+`openrouter`, `mistral` and `ollama`. Set the matching `<PROVIDER>_API_KEY` and
+optionally `<PROVIDER>_MODEL`; Gemini uses `GEMINI_API_KEY` and `GEMINI_MODEL`.
 
 Free tiers: Groq, Cerebras, Mistral, OpenRouter (some models). Ollama is fully
 local and needs no key at all. Anthropic and OpenAI both require paid credits —
