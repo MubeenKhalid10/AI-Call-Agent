@@ -5,6 +5,7 @@ description = "Voice AI bot built with Pipecat"
 requires-python = ">=3.11"
 dependencies = [
     "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
     "fastembed>=0.8.0",
     "pgvector>=0.3",
     # Google's libphonenumber, for turning whatever a CSV contains into E.164.
@@ -17,7 +18,9 @@ dependencies = [
     # transport and its per-carrier serializers handle. See src/telephony/.
     "pipecat-ai[anthropic,cartesia,deepgram,elevenlabs,evals,google,runner,silero,webrtc,websocket]>=1.4.0",
     "pypdf>=6.16.2",
+    "python-dotenv>=1.2.3",
     "tzdata>=2026.3",
+    "uvicorn>=0.52.4",
 ]
 
 [dependency-groups]

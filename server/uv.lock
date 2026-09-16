@@ -23,12 +23,15 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "asyncpg" },
+    { name = "fastapi" },
     { name = "fastembed" },
     { name = "pgvector" },
     { name = "phonenumbers" },
     { name = "pipecat-ai", extra = ["anthropic", "deepgram", "evals", "google", "runner", "webrtc", "websocket"] },
     { name = "pypdf" },
+    { name = "python-dotenv" },
     { name = "tzdata" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -40,12 +43,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
+    { name = "fastapi", specifier = ">=0.141.1" },
     { name = "fastembed", specifier = ">=0.8.0" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "phonenumbers", specifier = ">=9.0.38" },
     { name = "pipecat-ai", extras = ["anthropic", "cartesia", "deepgram", "elevenlabs", "evals", "google", "runner", "silero", "webrtc", "websocket"], specifier = ">=1.4.0" },
     { name = "pypdf", specifier = ">=6.16.2" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "tzdata", specifier = ">=2026.3" },
+    { name = "uvicorn", specifier = ">=0.52.4" },
 ]
 
 [package.metadata.requires-dev]
