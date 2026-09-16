@@ -1,0 +1,72 @@
+# Phase 28. The basics, answered from the campaign context — not from a
+# retrieval that may or may not find the right passage.
+#
+# "Can you share more details?" is the first question a prospect asks and it
+# was the one the agent sometimes answered with "I don't have that
+# information": the question passed the retrieval gate, the vector search
+# found nothing above the threshold, and the "nothing relevant found" block
+# told the model — immediately before generation — that it knew nothing about
+# the business. The system instruction now carries the company's description,
+# its services and the agent's identity as facts that need no lookup, and the
+# knowledge blocks point at them.
+#
+# The eval bot runs on the SAMPLE configuration from `.env.example` (Meridian
+# Fleet Systems, through `evals/eval_env.py`), so the judge criteria name
+# Meridian's facts. The same mechanism carries a deployment's own company.
+name: company_overview
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  - user: "Sorry, who is this? Are you a real person?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response says it is Alex, that it is an AI assistant (or an
+          automated or virtual assistant), and that it is calling on behalf of
+          Meridian Fleet Systems. It FAILS if it claims or implies it is
+          human, or names a different company.
+
+  - user: "Okay. Can you share some more details about what you actually do?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          The bot's campaign context says Meridian Fleet Systems builds fleet
+          management software for mid-sized logistics operators, sold as a
+          subscription with no hardware to buy, and that its services are live
+          vehicle tracking, route planning, maintenance scheduling and driver
+          safety scoring. The response explains in one to three sentences
+          what Meridian does, consistent with those facts, and does not say
+          it lacks information about the company. It FAILS if it says it does
+          not have that information, if it describes a different kind of
+          business, or if it invents customers, results or prices.
+
+  - user: "And what services do you offer exactly?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response names at least two of: vehicle tracking, route
+          planning, maintenance scheduling, driver safety scoring — briefly,
+          without a long list — and does not say it lacks the information. It
+          FAILS if it names a service that is not one of those four or says it
+          cannot answer.
+
+  - user: "Do you have an office in Brazil?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          The bot's knowledge base names offices in Rotterdam, Austin and
+          Singapore, and support teams in Rotterdam and Austin; nothing about
+          Brazil. The response passes if it says plainly that it does not have
+          that information (or is not aware of a Brazilian office) and offers
+          to have somebody confirm, whether or not it also mentions some of
+          those known places — it does not have to list all of them. It FAILS
+          if it claims or implies there is an office in Brazil, or names any
+          office or location that is not Rotterdam, Austin or Singapore.

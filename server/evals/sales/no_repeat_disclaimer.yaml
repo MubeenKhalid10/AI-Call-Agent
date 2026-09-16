@@ -1,0 +1,65 @@
+# Phase 33. Several unknown / general questions in a row must not turn into a
+# repeated robotic disclaimer, and must never be answered with an invented
+# company fact.
+#
+# Runs on the Meridian sample config (evals/eval_env.py). Chosen so every asked
+# fact is genuinely ABSENT from Meridian's knowledge base: the handbook names no
+# CEO, gives no revenue figure, and lists offices only in Rotterdam, Austin and
+# Singapore (no Berlin). (It DOES state headcount — 84 employees — and the year
+# founded — 2019 — so those are deliberately not asked here: answering them from
+# the handbook is correct grounding, not fabrication.) The agent must handle the
+# genuine unknowns with natural uncertainty and a follow-up, not a canned line
+# repeated verbatim and not a fabricated number.
+name: no_repeat_disclaimer
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  - user: "Who is your CEO?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response does not name a CEO (that is not information it was
+          given). It says naturally that it is not certain of that or does not
+          have it to hand and offers to have someone confirm or follow up. It
+          FAILS if it invents a name, or if it answers with a flat "I don't have
+          that information" and nothing else.
+
+  - user: "And what was your revenue last year?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the knowledge base gives no revenue figure. The response again handles
+          the unknown honestly — natural uncertainty and an offer to follow up —
+          WITHOUT inventing a number. Crucially, it does not repeat the exact
+          same disclaimer sentence it used for the previous question word for
+          word; it phrases it differently or moves things forward. It FAILS if
+          it states or estimates a revenue figure, or if it repeats an identical
+          canned "I don't have that information" line.
+
+  - user: "Do you have an office in Berlin?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          Meridian's offices are Rotterdam, Austin and Singapore; there is no
+          Berlin office. The response does not claim a Berlin office. It says
+          plainly there is not one (optionally naming the real cities) or that
+          it is not certain and will confirm. It FAILS if it claims or implies a
+          Berlin office, or invents any other location.
+
+  - user: "No worries. What time is it there right now, roughly?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          this is ordinary small talk, not a company fact. The response answers
+          it lightly and naturally (a rough time, or a friendly "not sure off
+          the top of my head") and stays conversational. It FAILS if it answers
+          this general question with "I don't have that information" as though it
+          were a restricted company fact.

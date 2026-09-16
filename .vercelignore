@@ -1,0 +1,23 @@
+# What a `vercel deploy` from this machine does not upload. A Git deploy
+# already leaves out everything .gitignore does; this keeps the upload small
+# and the bundle inside Vercel's limit. Keep server/src and server/web.
+.venv
+server/.venv
+server/.env
+server/.env.*
+!server/.env.example
+server/tests
+server/evals
+server/eval-runs
+server/call-reports
+server/recordings
+server/drills
+server/scripts
+server/*.log
+server/**/*.log
+server/validation-report.*
+server/*.csv
+eval-runs
+n8n
+.claude
+*.md

@@ -1,0 +1,32 @@
+# 5. "We already use somebody." Recorded as a fact, not argued away.
+#
+# The failure mode here is the model that immediately starts comparing itself
+# to a competitor it knows nothing about. It has no approved claims about
+# anyone else's product, so anything it says on that subject is invented.
+name: existing_provider
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "We already use Fleetio for all of this, so I don't think we need anything."
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: record_objection
+            args: { kind: EXISTING_PROVIDER }
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response acknowledges that they already have a provider and asks
+          one question about how it is working for them. It FAILS if it
+          criticises the other provider, claims to be better than it, compares
+          specific features, or asserts anything factual about that company's
+          product or pricing.

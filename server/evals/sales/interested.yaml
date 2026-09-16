@@ -1,0 +1,75 @@
+# 1. An interested prospect, from hello to an agreed next step.
+#
+# The scenario that proves the whole arc works: the agent opens without
+# pitching, asks before it explains, records what it hears, and asks for a next
+# step. The function-call assertions are the state machine's evidence — a call
+# that reaches `request_meeting` has been through discovery and value, because
+# nothing else records those facts.
+#
+# The greeting turn also carries the honesty check that matters most on a cold
+# call: the agent has no prior relationship with this person and must not
+# imply one.
+name: interested
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: >-
+          the bot opens a cold call: it introduces itself and says why it is
+          calling, in a couple of short sentences. It FAILS if it claims any
+          prior contact with the person - that they downloaded something,
+          signed up, filled in a form, visited a website, were referred by
+          somebody, or spoke to anyone before. It also fails if it launches
+          straight into a long pitch with no question.
+
+  # `within_ms` everywhere from here: on Groq's free tier the second request in
+  # any minute waits for the reset, and the greeting was the first. See
+  # meeting.yaml and HANDOFF.md.
+  - user: "Alright, you've got thirty seconds. What is it about?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response answers briefly and asks a question about the person's
+          own situation. It fails if it lists three or more features, or if it
+          talks for more than about three sentences.
+
+  # `within_ms` on the tool turns: a tool turn is two LLM requests, and Groq's
+  # free tier holds the second back for the minute to reset. See meeting.yaml.
+  - user: "We run about forty trucks and honestly the fuel bill is out of control. It's all on paper at the moment."
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: record_discovery
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response reacts to what was just said about fuel and paper
+          records, and asks one follow-up question rather than pitching.
+
+  - user: "I sign off on this kind of thing, and we'd want something in place this quarter."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: "the response acknowledges the timing or the decision, and moves the conversation forward"
+
+  # Phase 7: agreeing to a meeting now means checking the calendar first. The
+  # agent must offer real free times and must not claim anything is booked
+  # until `book_meeting` has succeeded — which this scenario never reaches;
+  # `meeting.yaml` covers the booking itself.
+  - user: "Okay, that does sound like what we need. Set something up for Thursday."
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: check_calendar_availability
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response offers one or two specific times on Thursday and asks
+          which suits (or says Thursday is full and offers another day). It
+          FAILS if it states that a meeting has been booked or confirmed, that a
+          calendar invitation has been sent, or that an email is on its way,
+          because nothing has been booked yet.

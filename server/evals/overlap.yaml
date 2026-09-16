@@ -1,0 +1,42 @@
+# Overlapping speech: the caller talks over the agent and keeps going. Phase 12.
+#
+# `barge_in.yaml` interrupts with a short question. This interrupts with a long
+# one — the caller starts talking while the agent is mid-answer and does not
+# stop for several seconds — which is the shape a real interruption usually
+# has. Two things have to hold: the agent stops when the caller starts, and it
+# waits until the caller has actually finished before answering, rather than
+# answering the first half of what they said.
+#
+# The assertion is on the answer: it has to address the *end* of the caller's
+# turn (the request to be called back on a different number), which the agent
+# could only have heard by waiting for the whole utterance.
+name: overlap
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  # Something with enough to say that there is a long answer to talk over.
+  - user: "Go on then, tell me about what you do and how it works."
+    expect:
+      - event: llm_started
+
+  - user: >-
+      Sorry, hang on a second, I've got someone at the door, and actually I
+      can't really talk right now, so could you do me a favour and call me back
+      on my office number tomorrow morning instead?
+    send_after:
+      event: llm_started
+      delay_ms: 2500
+    expect:
+      - event: response
+        within_ms: 150000  # the free Groq tier's per-minute wait, see short_answers.yaml
+        eval: >-
+          the response deals with the caller asking to be called back tomorrow
+          morning on their office number — it agrees to call back, asks for the
+          number, or asks what time. It FAILS if it carries on describing the
+          product, if it only acknowledges the interruption without addressing
+          the callback request, or if it asks the caller to repeat themselves.

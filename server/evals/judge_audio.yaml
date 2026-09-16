@@ -1,0 +1,15 @@
+# How the bot's replies are evaluated.
+#
+# Audio modality means the bot actually speaks and Moonshine (local, no key)
+# transcribes it, so `response` is the transcription of real synthesized audio
+# and the whole round trip is under test.
+#
+# The judge is Groq, via the factory in groq_judge.py: this project has no
+# Ollama install and no OpenAI key, which are the two judges the harness knows
+# about natively.
+modality: audio
+eval:
+  factory: evals.groq_judge.make_judge
+transcription:
+  service: moonshine
+  language: en

@@ -1,0 +1,34 @@
+# Phase 33 (2026-09-15). An explicit request to end the call is honoured.
+#
+# Observed on a live call: "can you please cut off the call?" was ignored and
+# the agent asked another discovery question. Now the END_CALL detector raises
+# an override that tells the agent to say a short goodbye and call end_call, and
+# the call hangs up on that goodbye even if the model forgets the tool.
+#
+# Text mode: the judge reads what the agent said. The hang-up itself shows in
+# the bot log ("CALL | closing line spoken"); the harness cannot see it, so the
+# last turn is observation-only.
+name: end_call
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  - user: "Actually, sorry — can you please cut off the call?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response accepts that the call is ending: it says a short, warm
+          goodbye (optionally offering to follow up another time) and asks
+          nothing further. It FAILS if it asks another question, pitches,
+          pushes for information, or tries to keep the conversation going.
+
+  # Observation-only: nothing more should be said after the goodbye — the call
+  # is ending.
+  - expect:
+      - event: response
+        absent: true
+        within_ms: 8000

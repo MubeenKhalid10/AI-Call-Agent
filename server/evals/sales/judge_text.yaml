@@ -1,0 +1,20 @@
+# How the sales scenarios are evaluated: text in, text out.
+#
+# **This is the deliberate exception to "every eval scenario is audio mode".**
+# Phase 2 made that rule because the STT *is* the turn-taking on this project,
+# so a text pass proved nothing about what that phase changed. Phase 6 changes
+# something else entirely — what the agent decides — and the harness's own
+# guidance is the right one here: text tests the brain, audio tests the ears and
+# the mouth.
+#
+# What that buys is the thing these scenarios exist for. Text mode is fast
+# enough to run the whole set in a couple of minutes rather than a quarter of an
+# hour, and it makes `function_call` assertions the primary check: whether the
+# agent recognised a do-not-call request is a deterministic question about which
+# tool it called, not a judge's opinion about its prose.
+#
+# `interruption.yaml` is the one scenario here that is audio mode, because
+# barge-in is precisely the thing text mode cannot exercise.
+modality: text
+eval:
+  factory: evals.groq_judge.make_judge

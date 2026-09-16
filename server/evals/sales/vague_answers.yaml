@@ -1,0 +1,40 @@
+# 12. Incomplete answers. Nothing may be recorded that was not said.
+#
+# The prospect hedges every question, so at the end of this call the agent knows
+# almost nothing — and the correct outcome is a record that says so. What is
+# being checked is the model's restraint: `record_discovery` called with a
+# timeline the person never gave is the failure, and it is a quiet one, because
+# it produces a CRM record that looks complete and is wrong.
+#
+# The response assertions cover the other half: an agent that cannot get an
+# answer must not keep asking the same question.
+name: vague_answers
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "I suppose so. It depends really."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response asks one short, more specific question, or offers
+          something concrete. It fails if it repeats its previous question
+          word for word, and it fails if it asks two or more questions at once.
+
+  - user: "Hard to say. Maybe. I'd have to look into it."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response stays polite and either narrows the question once more or
+          offers a way forward. It FAILS if it treats the hedging as agreement,
+          asserts that the person has a problem they never described, or claims
+          they are interested.

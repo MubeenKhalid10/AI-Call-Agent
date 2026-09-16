@@ -371,6 +371,65 @@ cd server && uv run bot.py
 ngrok http 7860                  # copy the https URL it prints
 ```
 
+To reach the **application** (`/app/`) on the same tunnel — a free ngrok
+gives one hostname, pointing at one port — run `app.py` with `--proxy-bot`
+(or `APP_PROXY_BOT=true`) and tunnel *its* port instead. The application then
+forwards every path it does not own (`/client`, `/api/offer`, `/ws`, the
+carrier's `POST /`) to the bot, so `https://<tunnel>/app/` is the
+application, `https://<tunnel>/client/` is the bot's client, and the carrier's
+`TELEPHONY_PUBLIC_URL` stays the same hostname:
+
+```bash
+cd server && uv run bot.py                 # terminal 1 — the agent, 7860
+cd server && uv run app.py --proxy-bot     # terminal 2 — the application, 7900, forwarding to 7860
+ngrok http 7900                            # terminal 3 — one hostname for both
+```
+
+### Deploying the application to Vercel
+
+The **application** (the page, the dashboard, the automation API) deploys to
+Vercel as one Python function, for as many people as need it at once. The
+**bot does not** — a voice pipeline is a long-lived process with WebSockets,
+which a function is not — so it keeps running where it does now (the ngrok
+tunnel, or a host of your own) and the deployed page frames it from there.
+Neither does the campaign engine: campaigns are created, started and watched
+on Vercel, and the calls are placed by `uv run app.py` (or
+`uv run campaign.py run`) on a machine that shares the same database.
+
+The repository root holds the deployment: `pyproject.toml` (the slim
+dependency set, ~345 MB installed, pinned to `server/uv.lock`'s versions),
+`uv.lock`, `vercel_app.py` (the entry; its docstring is the full reference),
+`vercel.json` and `.vercelignore`.
+
+1. **A PostgreSQL both sides can reach.** Supabase (use the *session pooler*
+   URL, `aws-0-<region>.pooler.supabase.com:5432`, user `postgres.<ref>` — the
+   direct host is IPv6-only and Vercel is IPv4) or Neon (the pooled URL); add
+   `?sslmode=require`. Create the schema once from the laptop:
+   `DATABASE_URL=<that url> uv run campaign.py init`.
+2. **Import the repository in Vercel** (Root Directory: the repository root,
+   the default). Vercel finds the entry through `[tool.vercel]` in
+   `pyproject.toml`; no framework preset to choose.
+3. **Environment variables:** paste `server/.env` into *Settings →
+   Environment Variables* (the editor accepts a whole `.env`), then change:
+   `DATABASE_URL` to the hosted one; `DASHBOARD_SESSION_SECRET` set (required
+   — every instance must sign sessions with the same secret; `uv run
+   security.py make-secret`); `APP_BOT_URL=https://<the bot's public
+   address>`; `SECURITY_REQUIRE_HTTPS=true` and
+   `SECURITY_TRUSTED_PROXIES=0.0.0.0/0,::/0` (Vercel terminates TLS and every
+   request arrives from its network). The provider keys stay: the
+   configuration page and the campaign wizard read them.
+4. **Deploy.** `https://<project>.vercel.app/app/`.
+
+What is different from `uv run app.py`, all by design of a function: the
+engine and the n8n deliverer are off; the live event stream is off
+(`APP_STREAM_ENABLED=false`, the page polls every 15 s); the knowledge base
+defaults to off (`KB_ENABLED=false`, its embedder is not installed); a CSV
+import or a document over 4.5 MB is refused by Vercel with 413; the Live
+Agent page frames the bot at `APP_BOT_URL`, so through ngrok the free
+tier's "visit site" page shows once inside the frame (or use *Open in a new
+tab*). Locally, `uv sync && uv run uvicorn vercel_app:app --port 7902` at
+the repository root runs the very same thing against `server/.env`.
+
 ```bash
 # server/.env — Twilio
 TELEPHONY_PROVIDER=twilio

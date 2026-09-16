@@ -1,0 +1,13 @@
+# How the harness synthesizes the caller's speech.
+#
+# Audio, not text, is the point. In text modality the harness sends the turn as
+# a string and the bot's STT never runs — which would skip Deepgram Flux, and
+# Flux *is* what decides when a turn ends. A text-mode pass would say nothing
+# about the turn-taking this phase is built on.
+#
+# Kokoro runs locally and needs no API key.
+modality: audio
+speech:
+  service: kokoro
+  voice: af_heart
+  language: en

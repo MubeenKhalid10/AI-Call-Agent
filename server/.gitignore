@@ -1,0 +1,12 @@
+# The nested server repository. Phase 18: credentials never enter version control.
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+*.eval.log
+*.debug.log
+eval-runs/
+recordings/
+call-reports/

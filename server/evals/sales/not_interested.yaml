@@ -1,0 +1,56 @@
+# 2. An uninterested prospect. Accepted the first time, never re-pitched.
+#
+# The assertion in the last turn is the requirement "never repeatedly push after
+# a clear rejection", and it is checked as an *absence* — the agent must not
+# come back with another angle after being told no. A model that treats "not
+# interested" as an objection to overcome fails here, which is exactly what a
+# sales-trained model tends to do.
+name: not_interested
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "Look, we're really not interested in anything like that. Thanks anyway."
+    expect:
+      # Phase 26: since Phase 7 the agent ends the call itself after its closing
+      # line, so there is no third turn to have — the goodbye is the assertion.
+      # The earlier "Yeah. Bye." turn could never be answered on a call the
+      # agent had already, correctly, ended. The hang-up itself is no longer
+      # the model's tool call to make: observed 2026-09-10, `end_call` came
+      # with the goodbye in one run of three on the configured model and none
+      # of three on another, so the conversation ends the call once the closing
+      # line has played (`SalesConversation.closing_line_needs_hangup`, pinned
+      # in tests/test_conversation.py). The harness has no event for a bot
+      # hanging up; the bot log shows it ("CALL | closing line spoken").
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: set_interest
+            args: { level: NOT_INTERESTED }
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response accepts the no gracefully and closes: it thanks them and
+          leaves the door open in a sentence, then says goodbye. It FAILS if it
+          asks why, offers an alternative, suggests a different product, asks
+          for a smaller commitment, asks to send information, or asks any
+          question that continues the sale.
+
+  # Phase 26: an observation-only turn. Without it the harness disconnects the
+  # moment the judge has passed the goodbye, which cuts the goodbye off and
+  # leaves the agent's own hang-up untested. This window keeps the line open
+  # long enough for the goodbye to finish and the agent to end the call (the
+  # bot log shows "CALL | closing line spoken"), and asserts the one thing the
+  # harness can see: nothing more is said after the goodbye — no second
+  # goodbye, no last line of pitch.
+  - expect:
+      - event: response
+        absent: true
+        within_ms: 8000

@@ -1,0 +1,27 @@
+# The ten-second "is the wiring intact" check.
+#
+# The only text-mode scenario here, and the only one that needs no local speech
+# models — the turn is sent as a string and judged on the LLM's text, so neither
+# Kokoro nor Moonshine has to load. Use it as the first thing you run after
+# touching the pipeline, and when a full audio run fails in a way that could be
+# either the bot or the harness.
+#
+# What it cannot tell you is anything this phase is actually about. Text mode
+# bypasses the bot's STT, so Deepgram Flux never runs and neither does turn
+# detection or barge-in. A pass here means the pipeline is assembled, the LLM is
+# reachable, and the context is accumulating. Everything else is in the audio
+# scenarios.
+name: smoke_text
+judge:
+  eval:
+    factory: evals.groq_judge.make_judge
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  - user: "What is the capital of Germany?"
+    expect:
+      - event: response
+        eval: "the response says the capital of Germany is Berlin"

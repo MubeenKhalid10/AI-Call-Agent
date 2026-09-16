@@ -1,0 +1,62 @@
+# 8. They agree to a meeting — and it gets booked, honestly, in that order.
+#
+# Phase 6's version of this scenario asserted the agent did NOT say a meeting
+# was booked, because nothing could book one. Phase 7 gives it a calendar, and
+# the honesty rule turns into a sequence: check availability, offer times,
+# claim nothing, and confirm a booking only after `book_meeting` has answered
+# success true. Both halves are asserted here, on the same call.
+#
+# Needs the Phase 7 tables (`uv run campaign.py init`) and the default local
+# calendar: Monday-Friday, nine to five, in CALENDAR_TIMEZONE. The prospect asks
+# for Monday morning, which is a working day whatever day the suite runs on. If
+# it is run with CALENDAR_PROVIDER=none the third turn's function-call assertion
+# fails by design — the agent is then meant to record the intent instead.
+#
+# `within_ms` on the tool turns is not generosity towards the bot. A tool turn
+# is two LLM requests — the call, then the reply to its result — and on Groq's
+# free tier (8,000 input tokens a minute, measured 2026-09-04, against ~3,100
+# per request) the second one is held back until the minute resets. The default
+# 60-second window was timing out on that wait, not on the bot. See HANDOFF.md.
+name: meeting
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  - user: "Actually this is quite timely. We're reviewing our fleet costs right now."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: "the response reacts to that and asks a question or offers a next step"
+
+  - user: "Sure, let's set something up. Would Monday morning work on your side?"
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: check_calendar_availability
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response offers one or two specific times on Monday and asks which
+          suits (or, if it says Monday is full, offers to check another day). It
+          FAILS if it says the meeting is booked, confirmed, scheduled or in the
+          calendar, if it says an invitation or details have been sent, or if it
+          gives no specific time at all.
+
+  - user: "The first one you mentioned is fine. Let's do that."
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: book_meeting
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response confirms that the meeting is booked for a specific day and
+          time on Monday, then thanks them or closes. It FAILS if it says a
+          colleague will confirm the time instead of confirming it, if it offers
+          alternative times again, or if it asks for anything further before
+          confirming.

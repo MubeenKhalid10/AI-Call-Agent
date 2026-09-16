@@ -1,0 +1,32 @@
+[project]
+name = "Ai-Voice-Agent"
+version = "0.1.0"
+description = "Voice AI bot built with Pipecat"
+requires-python = ">=3.11"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastembed>=0.8.0",
+    "pgvector>=0.3",
+    # Google's libphonenumber, for turning whatever a CSV contains into E.164.
+    # Not hand-rolled on purpose: the requirement is to never turn an ambiguous
+    # number into a confidently wrong one, and that is a data problem (per-country
+    # lengths, prefixes, carrier codes) rather than a parsing one.
+    "phonenumbers>=9.0.38",
+    # `websocket` is what carries the telephony transport: a phone call arrives
+    # as a websocket of the carrier's audio, which Pipecat's FastAPI websocket
+    # transport and its per-carrier serializers handle. See src/telephony/.
+    "pipecat-ai[anthropic,cartesia,deepgram,elevenlabs,evals,google,runner,silero,webrtc,websocket]>=1.4.0",
+    "pypdf>=6.16.2",
+    "tzdata>=2026.3",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.404,<2",
+    "ruff>=0.12.11,<1",
+]
+
+[tool.ruff]
+line-length = 100
+[tool.ruff.lint]
+select = ["I", "UP"]

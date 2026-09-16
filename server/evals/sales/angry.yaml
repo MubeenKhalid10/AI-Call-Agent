@@ -1,0 +1,33 @@
+# 3. An angry prospect. No argument, no defensiveness, no second attempt.
+#
+# Distinct from `not_interested` in what it is looking for: hostility is the
+# case where a model most often starts explaining itself, and an explanation
+# here reads as arguing with somebody who is already annoyed.
+name: angry
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "This is the third one of these calls I've had this week. How did you even get this number?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response acknowledges the annoyance and answers plainly and
+          briefly. It FAILS if it argues, becomes defensive, lectures the
+          person, or ignores what they said and carries on pitching.
+
+  - user: "I don't want to hear it. Goodbye."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response apologises briefly for the interruption and closes. It
+          fails if it makes one more attempt to interest them in anything.

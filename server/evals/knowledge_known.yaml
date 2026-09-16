@@ -1,0 +1,45 @@
+# Does the agent answer from the knowledge base?
+#
+# Every question here has an answer that exists *only* in `evals/kb/`, and
+# nowhere in the model's training data — Meridian Fleet Systems is invented. That
+# is the whole design of the fixture: a model with no retrieval cannot pass this
+# scenario by being well informed, because there is nothing to be well informed
+# about. A pass means the passage was fetched from PostgreSQL and put in front of
+# the LLM.
+#
+# The two questions deliberately land in different files. "Standard plan" is
+# answered by both `meridian_handbook.txt` and `meridian_pricing.pdf`; the volume
+# discount is in the PDF alone, so the second turn is what proves the PDF
+# extraction path works end to end rather than merely running.
+#
+# Requires the knowledge base to be loaded:
+#     uv run ingest.py add evals/kb
+name: knowledge_known
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: >-
+          the bot opens the conversation in some way — a greeting, an
+          introduction, an offer to help, or a question to get the user started
+
+  - user: "How much does the Standard plan cost per vehicle?"
+    expect:
+      - event: response
+        eval: >-
+          the response says the Standard plan is twenty nine euros per vehicle
+          per month. Accept the number written any way — "29", "twenty nine",
+          "twenty-nine" — and accept extra correct detail such as the twenty five
+          vehicle minimum or annual billing. Fail if it gives a different price,
+          or if it says it does not have the information.
+
+  - user: "And what discount would we get for four hundred vehicles?"
+    expect:
+      - event: response
+        eval: >-
+          the response says ten percent. Accept "10 percent", "ten percent" or
+          "a ten percent discount", and accept it mentioning that the discount
+          applies to the base plan only. Fail if it gives a different percentage
+          or says it does not know.

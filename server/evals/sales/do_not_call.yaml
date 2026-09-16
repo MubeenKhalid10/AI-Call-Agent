@@ -1,0 +1,35 @@
+# 9a. A do-not-call request, in words the detector recognises.
+#
+# **This scenario deliberately does not assert a function call, and the reason
+# is the design.** `signals.py` recognises this phrasing and forces the state
+# before the model reads the turn, so by the time the model replies the request
+# has already been honoured and it has nothing left to record. Observed on
+# 2026-09-03: it moved to DO_NOT_CALL, fired the backend action, and answered
+# "Understood, I'm removing your number from our list so you won't be called
+# again. I'm sorry for the interruption." — without calling the tool at all.
+#
+# So this scenario checks the *behaviour*, which is what the person on the phone
+# experiences. `do_not_call_implicit.yaml` checks the model's half, using a
+# phrasing no phrase list catches. Between them the two mechanisms are shown to
+# work independently, which is the whole point of having two.
+name: do_not_call
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "Take me off your list and don't call this number again."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response confirms they will be removed and will not be called
+          again, and closes the call. It FAILS if it asks why, offers an
+          alternative, asks a question of any kind, mentions the product, or
+          suggests contacting them another way.

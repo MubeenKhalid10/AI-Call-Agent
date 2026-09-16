@@ -1,0 +1,40 @@
+# Barge-in: cutting the agent off mid-sentence and being answered.
+#
+# This is the scenario that cannot be faked in text mode. The interruption is
+# real audio arriving while the agent's own audio is playing, and what has to
+# happen is that Flux notices the caller has started a turn, the in-flight LLM
+# and TTS work is discarded, and the agent answers the *new* question instead of
+# finishing the old one.
+#
+# `send_after` anchors the interruption to `llm_started` plus a delay, so it
+# fires while the first answer is being spoken rather than at some wall-clock
+# guess. The delay has to clear TTS start (a few hundred ms after the LLM
+# begins) without outlasting the whole utterance.
+#
+# Asserting on the second answer covers both halves at once: the agent could
+# only have said "Paris" if the interruption reached it, and a bot that ignored
+# the barge-in would still be talking about the sky.
+name: barge_in
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  # Something with enough to say that there is a sentence to interrupt.
+  - user: "In a few sentences, tell me why the sky is blue."
+    expect:
+      - event: llm_started
+
+  - user: "Sorry, never mind that. What is the capital of France?"
+    send_after:
+      event: llm_started
+      delay_ms: 2500
+    expect:
+      - event: response
+        eval: >-
+          the response answers the question about France by naming Paris. It
+          fails if the response is about the sky, light, or the atmosphere
+          instead.

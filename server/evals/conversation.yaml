@@ -1,0 +1,54 @@
+# The baseline: does a normal conversation work end to end, over real audio?
+#
+# Every turn here goes out as synthesized speech and comes back as transcribed
+# speech, so a pass means the whole chain ran — Flux decided each turn was over,
+# the LLM answered, Cartesia spoke it, and the words survived the round trip.
+#
+# The third turn is the one worth having. "Half of them are refrigerated" is not
+# a complete thought on its own; a reply that connects it to the fleet described
+# a moment earlier proves the context aggregators are carrying the conversation
+# forward rather than treating each turn as new.
+#
+# **Rewritten in Phase 6, and the reason is worth recording.** This scenario and
+# `voice_quality` used to ask general-knowledge questions — the capital of
+# Germany, the day after Tuesday. Phase 3 then told the agent to answer only
+# from the knowledge base, and the two scenarios became flaky: the agent
+# sometimes refused the trivia, correctly by its instructions, and the judge
+# marked it wrong. Phase 4 left the question open on purpose, because *which*
+# behaviour was wrong was a product question nobody had answered.
+#
+# Phase 6 answers it. The agent is a cold-calling sales representative, and a
+# rep asked for the capital of Spain mid-call is in an odd conversation, not a
+# revealing one. So both scenarios now test the same two mechanisms — multi-turn
+# memory here, speakable output in `voice_quality` — with turns that belong in
+# the call the agent is actually on. What happens when a prospect genuinely does
+# go off-topic is `sales/unrelated_question.yaml`, which is where that behaviour
+# should have been tested all along.
+name: conversation
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  # The agent speaks first, so wait for it before saying anything. Talking over
+  # the greeting would test barge-in, which is barge_in.yaml's job.
+  - expect:
+      - event: response
+        eval: >-
+          the bot opens the conversation in some way — a greeting, an
+          introduction, an offer to help, or a question to get the user started
+
+  - user: "We run about forty trucks out of Lahore, mostly long haul."
+    expect:
+      - event: response
+        eval: >-
+          the response reacts to what was just said about the fleet, rather than
+          ignoring it or changing the subject
+
+  - user: "Half of them are refrigerated."
+    expect:
+      - event: response
+        eval: >-
+          the response shows it remembered the fleet described a moment ago — it
+          refers to the trucks, the forty vehicles, the long-haul work or the
+          fleet in general. It fails if it treats the sentence as the start of an
+          unrelated new topic, or asks what is being talked about.

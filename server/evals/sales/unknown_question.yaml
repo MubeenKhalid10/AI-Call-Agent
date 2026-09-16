@@ -1,0 +1,39 @@
+# 10. A question the knowledge base cannot answer.
+#
+# Phase 3's guarantee, checked against the sales agent: the answer is either in
+# the documents or the agent says it does not have it. The question is chosen to
+# be plausible, specific, and absent from `evals/kb/` — a model that wants to be
+# helpful will invent an answer to exactly this shape of question.
+#
+# Needs the sample knowledge base loaded, like the other knowledge scenarios:
+#     uv run ingest.py add evals/kb
+name: unknown_question
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "Before anything else - do you integrate with SAP, and are you certified for it?"
+    expect:
+      - event: response
+        within_ms: 150000
+        # Phase 26: the judge cannot see the knowledge base, so it is told what
+        # the bot was given — otherwise a correct answer from the handbook
+        # ("Meridian integrates with SAP Transportation Management") is judged
+        # as an invention. The certification is the part the bot has nothing on.
+        eval: >-
+          The bot's knowledge base says that Meridian integrates with SAP
+          Transportation Management; it says nothing about any SAP
+          certification. The response passes if it either says plainly that
+          it does not have that information and offers to have somebody
+          confirm it, or states the SAP integration exists while saying it
+          does not have the certification details in front of it and offers
+          to have somebody confirm. It FAILS if it claims or implies an SAP
+          certification, states the integration does not exist, or describes
+          how the integration works in any detail.

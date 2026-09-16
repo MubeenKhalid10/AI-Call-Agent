@@ -1,0 +1,36 @@
+# 11. The prospect cuts in. The one sales scenario that must be audio.
+#
+# Everything else in this directory tests what the agent decides, which text
+# mode does faster and more deterministically. Barge-in is the exception: the
+# interruption *is* real audio arriving while the agent's own audio plays, and
+# text mode has neither. So this scenario reuses the audio blocks the Phase 2
+# suite established, one directory up.
+#
+# What has to happen is the whole Phase 2 mechanism, still working under a
+# Phase 6 pipeline that has a director and eight tools in it: Flux notices the
+# turn starting, the in-flight LLM and TTS work is discarded, the truncated
+# reply is marked in the context, and the agent answers the *new* thing.
+name: interruption
+user: !include ../user_audio.yaml
+judge: !include ../judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Something with enough to say that there is a sentence to interrupt.
+  - user: "Go on then, tell me about what you do and how it works."
+    expect:
+      - event: llm_started
+
+  - user: "Sorry, hang on. Who did you say you were with?"
+    send_after:
+      event: llm_started
+      delay_ms: 2500
+    expect:
+      - event: response
+        eval: >-
+          the response answers the question about who is calling. It FAILS if it
+          carries on describing the product instead, and it fails if it
+          apologises for being interrupted or restarts its previous sentence.

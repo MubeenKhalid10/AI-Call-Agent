@@ -1,0 +1,43 @@
+# 13. Something off-topic. Answered like a person, without derailing.
+#
+# A cold call is a conversation, and the grounding rule is about facts on the
+# business — not about small talk. An agent that refuses "where are you calling
+# from?" because it is not in the knowledge base sounds broken; one that invents
+# an office is worse. The line it has to hold is between the two.
+name: unrelated_question
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # Phase 26: `within_ms` on every expectation after the greeting, as the tool-turn
+  # scenarios have carried since Phase 7 — on the free Groq tier a turn's second
+  # request can wait 20–50 s for the minute to reset, and the harness's 60 s
+  # default measured that wait, not the bot. See meeting.yaml and HANDOFF.md.
+  - user: "Hang on - where are you calling from? You don't sound local."
+    expect:
+      - event: response
+        within_ms: 150000
+        # Phase 26: the judge cannot see the knowledge base, so it is told what
+        # the bot may know — the handbook names Rotterdam, Austin and
+        # Singapore as Meridian's offices and Rotterdam and Austin as where
+        # the support team sits. Anything else is an invention.
+        eval: >-
+          The bot's knowledge base says Meridian has offices in Rotterdam,
+          Austin and Singapore and that its support team is based in
+          Rotterdam and Austin. The response answers naturally and briefly,
+          either naming one of those places (Europe, the Netherlands, Texas
+          or the US are acceptable ways to say them) or saying plainly that
+          it does not know, and then gets back to the conversation. It FAILS
+          if it names an office, a city or a country that is not one of
+          those, and it fails if it refuses to engage at all.
+
+  - user: "Right. What's the weather like there?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response handles the small talk lightly in one sentence and steers
+          back. It fails if it claims to know the weather.

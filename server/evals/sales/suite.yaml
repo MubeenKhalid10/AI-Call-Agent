@@ -1,0 +1,78 @@
+# The Phase 6 suite: the fourteen conversations a cold-calling agent has to
+# survive, driven against a real bot with a real LLM.
+#
+#     cd server
+#     SESSION_IDLE_TIMEOUT_SECS=3600 USER_IDLE_TIMEOUT_SECS=120 \
+#       uv run python -m pipecat.evals suite evals/sales/suite.yaml
+#
+# **Both overrides are load-bearing, and the second one is new here.** The bots
+# are spawned as subprocesses and inherit this environment, and neither variable
+# is set in `.env`, so a shell override reaches them (`load_dotenv(override=True)`
+# means anything `.env` *does* set would win — see HANDOFF's Failed §13).
+#
+# `USER_IDLE_TIMEOUT_SECS=120` is the one to understand. In text mode a turn is
+# an HTTP round trip away rather than a person talking, and the gap between two
+# scenario turns routinely exceeds the 12-second production default — so the
+# silence handler decides the caller has gone quiet and injects a nudge into the
+# context *between* the scenario's turns. Observed on 2026-09-03: the nudge
+# landed after the prospect's question, the model answered the nudge instead of
+# the question, and the scenario failed for a reason that had nothing to do with
+# what it was testing. Raising it removes the artefact without changing anything
+# the scenarios assert; `silence.yaml` in the audio suite is where that
+# behaviour is actually tested.
+#
+# Run `uv run python tests/test_conversation.py` first. It takes a second, needs
+# no keys, and covers the conversation layer's own logic exhaustively — so a
+# failure here after that passes is a fact about the *model*, which is the only
+# thing this suite can tell you that the checks cannot.
+#
+# **Thirteen of these are text mode, and that is the deliberate difference from
+# `../suite.yaml`.** Phase 2's rule was that every scenario is audio, because on
+# this project the STT is the turn-taking and a text pass proves nothing about
+# it. What Phase 6 changed is what the agent *decides*, and text mode tests that
+# faster, more cheaply, and — crucially — deterministically, because
+# `function_call` assertions ask which tool was called rather than asking a
+# judge to interpret prose. `interruption` is audio for the one thing text mode
+# cannot do at all.
+#
+# `unknown_question` needs the sample knowledge base loaded:
+#
+#     uv run ingest.py init && uv run ingest.py add evals/kb
+#
+# A fresh bot per scenario, at concurrency 1, for the reasons the Phase 2 suite
+# gives: a scenario must not inherit the previous one's conversation, and the
+# audio scenario shares a CPU with Kokoro, Moonshine and Silero.
+concurrency: 1
+repeat: 1
+runs_dir: ../../../eval-runs
+scenarios_dir: .
+# Phase 26: the bots run with the SAMPLE sales configuration and sample
+# prospect from `.env.example` (Meridian Fleet Systems — the company the
+# knowledge base in `evals/kb` describes), whatever `.env` says, so the
+# scenarios and their judge criteria stay consistent with the handbook. See
+# `evals/eval_env.py`.
+spawn: "{python} -m evals.eval_env {bot} -t eval --port {port}"
+
+suite:
+  - bot: ../../bot.py
+    scenarios:
+      - introduction
+      - interested
+      - not_interested
+      - angry
+      - price_objection
+      - existing_provider
+      - send_information
+      - callback
+      - meeting
+      - do_not_call
+      - do_not_call_implicit
+      - unknown_question
+      - interruption
+      - vague_answers
+      - unrelated_question
+      - wants_human
+      - company_overview
+      - general_question
+      - no_repeat_disclaimer
+      - end_call

@@ -1,0 +1,103 @@
+Meridian Fleet Systems — Sales Handbook
+
+ABOUT THE COMPANY
+
+Meridian Fleet Systems builds fleet management software for mid-sized logistics
+operators. The company was founded in 2019 in Rotterdam and now has 84 employees
+across three offices: Rotterdam, Austin, and Singapore. Meridian serves 412
+customers who between them operate just over 60,000 vehicles.
+
+The product is sold as a subscription. There is no hardware to buy: Meridian
+works with the telematics devices a fleet already has, and ships its own dongle
+only for vehicles that have none.
+
+WHAT THE PRODUCT DOES
+
+Meridian has four modules. Live Track shows every vehicle on one map with a
+refresh interval of ten seconds. Route Planner builds multi-stop routes and
+re-plans them when traffic changes. Maintenance keeps a service schedule per
+vehicle and raises a work order automatically when an odometer threshold is
+passed. Driver Safety scores each driver on harsh braking, cornering, speeding
+and phone use, and produces a weekly coaching report.
+
+Live Track and Maintenance are included in every plan. Route Planner and Driver
+Safety are add-ons on the Standard plan and included on Enterprise.
+
+PLANS AND PRICING
+
+Meridian is priced per vehicle per month, billed annually in advance.
+
+The Starter plan is 14 euros per vehicle per month. It covers Live Track and
+Maintenance, up to 25 vehicles, and email support. There is no minimum contract
+beyond the first year.
+
+The Standard plan is 29 euros per vehicle per month, with a minimum of 25
+vehicles. It adds API access, custom reporting, and a named account manager.
+Route Planner is 6 euros per vehicle per month on top, and Driver Safety is 5
+euros per vehicle per month on top.
+
+The Enterprise plan is 44 euros per vehicle per month, with a minimum of 250
+vehicles. Everything is included, along with single sign-on, a private data
+region, and a 99.9 percent uptime commitment backed by service credits.
+
+Monthly billing is available on Starter and Standard at a 15 percent premium.
+Fleets over 1,000 vehicles are quoted individually.
+
+TRIALS AND ONBOARDING
+
+Every prospect gets a 30 day free trial with no card required, capped at 50
+vehicles. Trials can be extended once by 14 days at the account manager's
+discretion.
+
+Standard onboarding takes two weeks and is done remotely. Enterprise onboarding
+takes four to six weeks and includes an on-site day. Data import from a previous
+system is included at no charge for up to three years of history; anything older
+is quoted as a project.
+
+SUPPORT
+
+Email support is answered within one business day on Starter, four business
+hours on Standard, and one hour on Enterprise. Phone support is available on
+Standard and Enterprise from 7am to 7pm Central European Time, Monday to Friday.
+Enterprise customers also get a 24/7 emergency line for outages.
+
+The support team is based in Rotterdam and Austin. There is no support coverage
+on weekends except on the Enterprise emergency line.
+
+INTEGRATIONS
+
+Meridian integrates with SAP Transportation Management, Oracle Transportation
+Management, Microsoft Dynamics, Salesforce, Slack, and Microsoft Teams. Fuel card
+integrations exist for Shell, BP and DKV. There is a REST API and a webhook
+system on Standard and above; the API is rate limited to 600 requests per minute.
+
+There is no integration with NetSuite today. It is on the roadmap for the second
+half of next year but has not been committed to a release.
+
+SECURITY AND COMPLIANCE
+
+Meridian is ISO 27001 certified and completes a SOC 2 Type II audit annually.
+Data is stored in the European Union by default, in Frankfurt. Enterprise
+customers can choose a private data region in Frankfurt, Virginia or Singapore.
+
+All data is encrypted in transit with TLS 1.3 and at rest with AES-256. Customer
+data is retained for 24 months by default and can be configured down to 6 months
+or up to 7 years. Meridian has never had a reportable data breach.
+
+CONTRACTS AND CANCELLATION
+
+Contracts run for 12 months and renew automatically unless cancelled 60 days
+before the renewal date. There is no early termination for convenience on
+Enterprise; Starter and Standard can be cancelled at renewal only.
+
+Meridian offers a 60 day money-back guarantee on the first year of a Starter or
+Standard contract. Refunds are not offered on Enterprise, which is instead
+covered by the uptime service credits.
+
+COMPETITIVE POSITIONING
+
+The three competitors named most often in deals are Samsara, Verizon Connect and
+Webfleet. Meridian wins on price against Samsara, on ease of onboarding against
+Verizon Connect, and on the depth of the maintenance module against Webfleet.
+Meridian typically loses when a prospect needs in-cab video, which Meridian does
+not offer at all.

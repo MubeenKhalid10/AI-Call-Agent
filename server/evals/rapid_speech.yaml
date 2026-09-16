@@ -1,0 +1,40 @@
+# A long, dense turn with no pauses in it. Phase 12.
+#
+# The opposite of `short_answers.yaml`: one breath with five facts in it, the
+# way a busy person talks when they have decided to give you thirty seconds.
+# Flux must not end the turn early — a turn cut off after "forty trucks" loses
+# the four facts after it — and the agent must show it heard the whole thing.
+#
+# Kokoro synthesises at a fixed rate, so what this exercises is length and
+# density rather than tempo. `tests/phone_drill.py rapid` plays the same kind of
+# sentence at 1.35x over the phone path, which is where tempo is tested.
+#
+# The assertion asks for two of the facts back. Not all five — a reply that
+# recited all of them would be a bad reply — but a response that reflects none
+# of them, or asks what the caller does, means the turn did not arrive whole.
+name: rapid_speech
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  - user: >-
+      Right so quickly we've got forty trucks running out of Lahore half of
+      them refrigerated fuel is by far our biggest cost I'm the one who signs
+      off on suppliers and we're looking at changing something before the end
+      of the year so what exactly does your tracking actually do.
+    expect:
+      - event: user_transcription
+        within_ms: 20000
+      - event: response
+        within_ms: 150000  # the free Groq tier's per-minute wait, see short_answers.yaml
+        eval: >-
+          the response shows it heard the caller's situation: it refers to at
+          least two of these — the forty trucks, Lahore, the refrigerated
+          vehicles, fuel being the biggest cost, the caller choosing suppliers,
+          or the end-of-year timing — OR it directly answers what the tracking
+          does. It FAILS if it asks what the caller does, asks them to repeat
+          themselves, or reacts as though only a fragment was said.

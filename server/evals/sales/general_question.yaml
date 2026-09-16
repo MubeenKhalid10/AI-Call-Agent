@@ -1,0 +1,35 @@
+# Phase 33. A general, non-company question is answered naturally — not with
+# "I don't have that information".
+#
+# The KB restriction is for facts about the business. Ordinary conversational
+# questions may be answered from normal knowledge, briefly, then steered back to
+# the call. This scenario runs on the Meridian sample config (evals/eval_env.py).
+name: general_question
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  - user: "Quick one before we start — what's the capital of France?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response answers the question naturally — it says Paris, or gives
+          the answer in passing — and may then gently bring the conversation
+          back to why it is calling. It FAILS if it says it does not have that
+          information, that it cannot answer, that it only has information about
+          the company, or otherwise refuses a simple general question.
+
+  - user: "Ha, fair. And what's your favourite programming language?"
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response gives a natural, light answer (naming a language, or
+          saying it does not really have favourites) and stays friendly, then
+          may steer back to the prospect. It FAILS if it answers with "I don't
+          have that information", refuses, or claims a company fact it was not
+          given.

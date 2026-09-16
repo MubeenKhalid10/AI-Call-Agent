@@ -1,0 +1,60 @@
+# Short answers: "Yes." "No, not really." "Okay." — over real audio. Phase 12.
+#
+# A one-word turn is the hardest kind for the whole chain. It is short enough
+# that Flux has almost no prosody to judge end-of-turn from, short enough that a
+# transcription error is the whole transcript, and short enough that a model
+# tempted to ask "sorry, could you say that again?" has an excuse. On a real
+# phone most of a prospect's turns are this length.
+#
+# Each turn asserts the same thing: the agent took the answer and moved on,
+# without asking the caller to repeat themselves. What it says is the
+# playbook's business — on 2026-09-05 the judge failed a turn because the
+# agent re-asked a discovery question the caller had brushed off, which is a
+# conversational choice and not a hearing problem, so the criteria now fail
+# only on "I didn't catch that" and "say that again". That it heard a single
+# word and treated it as an answer is what is under test.
+name: short_answers
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  # `within_ms: 150000` on every reply, for the reason the sales scenarios
+  # carry it: on the free Groq tier the second request in a minute waits for
+  # the minute to reset, and the harness's 60 s default timed out on that wait
+  # (turn 3, first run, 2026-09-05) with the bot doing nothing wrong.
+  - user: "Yes."
+    expect:
+      - event: user_transcription
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response treats "yes" as an answer and carries the conversation
+          on — it asks a question (any question, including one it asked
+          before), or continues its point. It FAILS only if it says it did not
+          hear or did not catch what was said, or asks the caller to say it
+          again.
+
+  - user: "No, not really."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response accepts a short negative answer and moves on — it asks
+          a question (any question, including one it asked before), or
+          acknowledges it and continues. It FAILS only if it says it did not
+          hear or did not catch what was said, or asks the caller to say it
+          again.
+
+  - user: "Okay."
+    expect:
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response treats "okay" as acknowledgement and continues the
+          conversation with a question or a next step. It FAILS only if it
+          says it did not hear or did not catch what was said, or asks the
+          caller to say it again.

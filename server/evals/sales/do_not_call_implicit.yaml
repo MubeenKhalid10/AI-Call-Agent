@@ -1,0 +1,37 @@
+# 9b. A do-not-call request in words no phrase list catches.
+#
+# The other half of `do_not_call.yaml`, and the one that justifies having tools
+# at all. "I'd appreciate it if you didn't contact me about this again" is a
+# perfectly ordinary way to say it and it matches none of the patterns in
+# `signals.py` — "didn't contact" is not "don't contact", and writing a pattern
+# for every conjugation of every verb is exactly the fragile string matching the
+# requirement forbids relying on.
+#
+# So the model has to recognise it, and the function-call assertion here is the
+# proof that it does. A failure means the deterministic floor is carrying more
+# weight than it should, which is worth knowing: the floor is a floor, not a
+# plan.
+#
+# Phase 7 renamed the tool from `do_not_call` to `mark_do_not_call`.
+name: do_not_call_implicit
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the call in some way"
+
+  # `within_ms`: a tool turn is two LLM requests, and Groq's free tier holds the
+  # second back for the minute to reset. See meeting.yaml and HANDOFF.md.
+  - user: "Honestly, I'd appreciate it if you didn't contact me about this again. Ever."
+    expect:
+      - event: function_call
+        within_ms: 150000
+        calls:
+          - name: mark_do_not_call
+      - event: response
+        within_ms: 150000
+        eval: >-
+          the response accepts it, confirms they will not be contacted again,
+          and closes. It FAILS if it asks a question, offers an alternative, or
+          says anything further about the product.

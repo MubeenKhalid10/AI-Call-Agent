@@ -1,0 +1,64 @@
+# Does the agent admit it does not know, instead of inventing an answer?
+#
+# This is the scenario that matters most in Phase 3, and it is the harder half by
+# a distance. Getting a model to recite a passage you have handed it is easy;
+# getting it to decline when the passage is *nearly* right is not.
+#
+# The three questions are ordered by how hard they are to refuse, and the middle
+# one is the real test:
+#
+#   1. Credit cards - the PDF explicitly says there is no credit card option, so
+#      this is a knowledge base answer, not a refusal. It is here to prove the
+#      agent has not simply learned to say "I don't know" to everything, which
+#      would pass a naive version of this test while being useless.
+#   2. Non-profit discount - nothing in either document mentions non-profits, but
+#      both are full of discounts and percentages, so retrieval returns
+#      confident, on-topic, wrong material scoring around 0.56. No similarity
+#      threshold separates this from a real question; only the model reading the
+#      passages and noticing the answer is not in them can get this right. This
+#      is the case that would silently invent "ten percent for registered
+#      charities" without the grounding instruction.
+#   3. Yen - same shape, against a document that lists three accepted currencies.
+#      The failure mode is answering from the near-miss passage instead of from
+#      what it actually says.
+#
+# Requires the knowledge base to be loaded:
+#     uv run ingest.py add evals/kb
+name: knowledge_unknown
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: >-
+          the bot opens the conversation in some way — a greeting, an
+          introduction, an offer to help, or a question to get the user started
+
+  - user: "Can we pay by credit card?"
+    expect:
+      - event: response
+        eval: >-
+          the response says no, credit card payment is not available. Accept it
+          also mentioning bank transfer, direct debit, or that purchase orders
+          are Enterprise only. Fail if it says yes, or if it says it does not
+          have that information.
+
+  - user: "Do you offer a discount for registered non-profits?"
+    expect:
+      - event: response
+        eval: >-
+          the response says it does not have that information, or does not know,
+          and offers to find out or check. Fail if it states any non-profit or
+          charity discount as fact, quotes a percentage for non-profits, or says
+          outright that no such discount exists — the documents are silent on
+          this, so a confident answer either way is an invention.
+
+  - user: "Could we be invoiced in Japanese yen?"
+    expect:
+      - event: response
+        eval: >-
+          the response either says it does not have that information, or says
+          that only euros, pounds sterling and US dollars are accepted. Both are
+          honest readings of what the documents contain. Fail if it says yen is
+          accepted, or invents an exchange-rate or currency-conversion policy.

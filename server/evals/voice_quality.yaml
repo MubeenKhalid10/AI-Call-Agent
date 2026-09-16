@@ -1,0 +1,46 @@
+# Does what the agent says survive being spoken and heard?
+#
+# The system prompt tells the agent to write for the ear — no markdown, no
+# bullets, numbers spelled the way a person says them. In text modality that
+# instruction is trivially satisfiable and completely untested: a reply full of
+# asterisks reads fine as a string. Here the reply is synthesized by Cartesia and
+# transcribed back by Moonshine, so anything unspeakable either comes out as
+# noise or vanishes, and the judge sees what the caller would have heard.
+#
+# Numbers and lists are the sharp edge, which is why the turns invite both: a
+# question that begs for a bulleted answer, and one that begs for a figure.
+#
+# Rewritten in Phase 6 for the reason set out at the top of `conversation.yaml`:
+# it used to ask the agent for arithmetic and the day after Tuesday, which a
+# grounded sales agent sometimes and correctly declined.
+name: voice_quality
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  # An invitation to produce a bulleted list, which is exactly what must not
+  # come out of a phone.
+  - user: "Go on then, what do you actually do? Give me the main points."
+    expect:
+      - event: response
+        eval: >-
+          the response reads as ordinary spoken English that a person could say
+          out loud — no bullet points, no numbered lists, no asterisks, no
+          headings, no symbols — and it is short, two or three sentences at
+          most. What it claims does not matter here; only that it is speakable.
+
+  # An invitation to produce a figure, which has to be said the way a person
+  # would say it rather than written the way a screen would show it.
+  - user: "And how much does that usually save a company like ours, roughly?"
+    expect:
+      - event: response
+        eval: >-
+          the response is speakable English with any number given in words or
+          as a plainly spoken figure, and it either gives a figure it was
+          actually given or says plainly that it does not have that to hand. It
+          fails if it reads out symbols, percentages as punctuation, or any kind
+          of formatting.

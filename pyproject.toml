@@ -1,0 +1,39 @@
+# The Vercel deployment of the unified application (Phase 35). NOT the bot's
+# project — that is server/pyproject.toml, and `uv run` inside server/ keeps
+# using it. This file exists so Vercel (Root Directory = the repository)
+# installs only what `server/src/app` needs at runtime: the application, the
+# dashboard and the automation API over PostgreSQL. The voice pipeline's
+# extras (WebRTC, Silero, Deepgram, Cartesia, ElevenLabs, the eval harness,
+# fastembed) stay out — the bot does not run on Vercel, see vercel_app.py.
+#
+# Versions are pinned to server/uv.lock so both environments run the same code.
+# Bump them together: change server/pyproject.toml, `uv lock` there, copy the
+# versions here, then `uv lock` at the repository root.
+
+[project]
+name = "ai-voice-agent-vercel"
+version = "35"
+description = "The Ai-Voice-Agent unified application as a Vercel Function"
+requires-python = "==3.12.*"
+dependencies = [
+    "asyncpg==0.31.0",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "pgvector==0.5.0",
+    "phonenumbers==9.0.38",
+    # The application package imports pipecat's core (frames, the LLM service base,
+    # the audio utilities) through src/reliability and src/campaigns/runtime; no extra.
+    "pipecat-ai==1.8.1",
+    "pypdf==6.16.2",
+    "python-dotenv==1.2.3",
+    "python-multipart==0.0.32",
+    "tzdata==2026.3",
+    "uvicorn==0.52.4",
+    "websockets==16.1.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.vercel]
+entrypoint = "vercel_app:app"

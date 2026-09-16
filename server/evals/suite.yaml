@@ -1,0 +1,36 @@
+# Runs every scenario against a freshly spawned bot.
+#
+# `pipecat eval run` reuses one long-lived bot, which is faster but means each
+# scenario inherits the previous one's conversation. The suite spawns a new bot
+# per scenario on its own port, so a silence test cannot be contaminated by the
+# barge-in test that ran before it.
+#
+# `concurrency: 1` is deliberate and costs wall-clock time. These scenarios run
+# Silero VAD, Smart Turn, Kokoro and Moonshine locally on the CPU; running
+# several bots at once makes them contend, and the latency numbers in the bot's
+# own log — the thing this phase exists to measure — stop meaning anything.
+#
+# The two knowledge scenarios need the knowledge base loaded first, or they fail
+# with the agent politely saying it has no information about anything:
+#
+#     uv run ingest.py init
+#     uv run ingest.py add evals/kb
+concurrency: 1
+repeat: 1
+runs_dir: ../eval-runs
+scenarios_dir: .
+spawn: "{python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: ../bot.py
+    scenarios:
+      - conversation
+      - barge_in
+      - voice_quality
+      - silence
+      - knowledge_known
+      - knowledge_unknown
+      # Phase 12: what a real caller does that a scripted one did not.
+      - short_answers
+      - rapid_speech
+      - overlap

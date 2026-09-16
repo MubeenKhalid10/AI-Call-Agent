@@ -1,0 +1,41 @@
+# Silence: the caller stops talking and the agent notices.
+#
+# The failure this guards against is the quiet one — a line that just sits open
+# with neither side saying anything, which on a real call is how you lose
+# someone who got distracted and would have come back.
+#
+# After the agent's reply the scenario simply stops sending, and the third turn
+# waits. `USER_IDLE_TIMEOUT_SECS` defaults to 12s, so the budget below is that
+# plus room for the agent to compose and speak the check-in. Raise it if you
+# raise the timeout.
+#
+# `absent: true` on the fourth turn is the other half: it must nudge, and then it
+# must stop nudging. A bot that re-prompts every twelve seconds forever is worse
+# than one that says nothing.
+name: silence
+user: !include user_audio.yaml
+judge: !include judge_audio.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "the bot opens the conversation in some way"
+
+  - user: "Hi there, give me one moment."
+    expect:
+      - event: response
+
+  # Say nothing and wait for the agent to check in on its own.
+  - expect:
+      - event: response
+        within_ms: 30000
+        eval: >-
+          the bot checks whether the person is still there, or otherwise
+          acknowledges the silence. Any brief prompt to re-engage passes.
+
+  # The first nudge is the whole point of MAX_IDLE_PROMPTS; a second one within
+  # the same window would mean the escalation is not being counted.
+  - expect:
+      - event: response
+        absent: true
+        within_ms: 6000
