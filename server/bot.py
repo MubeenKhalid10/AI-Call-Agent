@@ -102,6 +102,7 @@ from src.conversation import (
 )
 from src.diagnostics import TurnDiagnostics
 from src.embeddings import shared_embedder
+from src.knowledge_index import KnowledgeIndex
 from src.knowledge_store import KnowledgeStore
 from src.latency import LatencyTracker
 from src.metrics import LatencyReporter
@@ -244,8 +245,10 @@ async def _run_pipeline(
 ) -> None:
     """Build and run the pipeline for one session. See `run_bot`."""
 
-    # The knowledge base, if this bot has one. `store` is kept so the pool can be
-    # closed when the session ends; `retriever` is the pipeline stage.
+    # The knowledge base, if this bot has one. Phase 37: `store` is the
+    # process-wide store — its pool is shared below and outlives the session —
+    # and `retriever` is this session's pipeline stage over the in-memory
+    # index, so no turn waits on the database for knowledge.
     store, retriever = await _make_knowledge_stage()
 
     # Phase 11: when the knowledge base and the campaign tables are the same
@@ -679,8 +682,8 @@ async def _run_pipeline(
         if actions is not None:
             await actions.close()
         await briefing.close()
-        if store is not None:
-            await store.close()
+        # Phase 37: `store` is the process-wide knowledge store; it outlives the
+        # session and is not closed here.
         if diagnostics.barge_ins:
             logger.info(f"BARGE-IN | {diagnostics.barge_ins} interruptions this session")
         logger.info(f"QUALITY | {monitor.describe()}")
@@ -1233,6 +1236,115 @@ def _dev_prospect(sales: SalesConfig) -> ProspectBrief | None:
     )
 
 
+# Phase 37: the process-wide knowledge base — one pool, one in-memory index,
+# one embedder — opened by `_open_knowledge` and kept for the life of the
+# process.
+_KNOWLEDGE: tuple[KnowledgeStore, KnowledgeIndex, object] | None = None
+# The event loop it was opened on. `_preflight` runs under its own
+# `asyncio.run`, which closes that loop; a pool opened there is dead by the
+# time the runner's loop starts a session ("Event loop is closed", seen on
+# the first try). So the pool is opened on the loop that will use it, and
+# what preflight opens is closed again before its loop ends.
+_KNOWLEDGE_LOOP: asyncio.AbstractEventLoop | None = None
+_KNOWLEDGE_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+async def _open_knowledge() -> tuple[KnowledgeStore, KnowledgeIndex, object]:
+    """Open the knowledge base once and hold it in memory. Phase 37.
+
+    **Why once per process and not once per session.** The knowledge base is on
+    the hosted PostgreSQL (so documents added from the deployed application
+    reach the bot), and a session that opened its own pool to it spent about
+    7 s doing so — after the person had picked up — and then two round trips
+    per turn, 1.6–6.6 s measured, inside the pipeline. The pool is opened here,
+    the passages are read into `KnowledgeIndex`, and a turn searches memory.
+    The index re-reads the database in the background when a document
+    changes.
+
+    Called at preflight, and by the first session if preflight did not run.
+    A connection failure is not swallowed, for the reason in
+    `_make_knowledge_stage`.
+    """
+    global _KNOWLEDGE, _KNOWLEDGE_LOOP
+    loop = asyncio.get_running_loop()
+    lock = _KNOWLEDGE_LOCKS.setdefault(id(loop), asyncio.Lock())
+    async with lock:
+        if _KNOWLEDGE is not None and _KNOWLEDGE_LOOP is loop:
+            return _KNOWLEDGE
+        if _KNOWLEDGE is not None:
+            # Opened on a loop that no longer runs; its pool cannot be used.
+            _KNOWLEDGE = None
+        # Phase 12: shared across sessions and warmed at startup, so a phone
+        # call does not spend its first second loading a model the process
+        # already has.
+        embedder = shared_embedder(CONFIG.embedding_model)
+        await embedder.warm_up()
+        store = await KnowledgeStore.connect(
+            CONFIG.kb_database_url,
+            dimensions=embedder.dimensions,
+            embed_model=embedder.model_name,
+            # One pool for every session (and, when the databases are shared,
+            # every session's campaign store) instead of one per session.
+            max_size=8,
+        )
+        index = KnowledgeIndex(
+            store, max_chunks=CONFIG.kb_index_max_chunks, refresh_secs=CONFIG.kb_refresh_secs
+        )
+        try:
+            await index.load()
+        except Exception:
+            await store.close()
+            raise
+        index.start()
+        _KNOWLEDGE = (store, index, embedder)
+        _KNOWLEDGE_LOOP = loop
+        return _KNOWLEDGE
+
+
+def _install_knowledge_lifespan(app) -> None:
+    """Open the knowledge base when the runner's server starts. Phase 37.
+
+    The runner adds its own lifespan later (inside `main()`) by wrapping
+    whatever is on the app, so this one is combined with it, not replaced.
+    Only for the runner's web server; the eval transport has no FastAPI app
+    and its first session opens the knowledge base itself.
+    """
+    if not CONFIG.kb_enabled:
+        return
+    from contextlib import asynccontextmanager
+
+    existing = getattr(app.router, "lifespan_context", None)
+
+    @asynccontextmanager
+    async def knowledge_lifespan(app):
+        try:
+            await _open_knowledge()
+        except Exception as exc:  # noqa: BLE001 - the first session retries and reports it
+            logger.warning(f"Knowledge base could not be opened at startup ({exc}); the first session will try again")
+        try:
+            if existing is not None:
+                async with existing(app):
+                    yield
+            else:
+                yield
+        finally:
+            await _close_knowledge()
+
+    app.router.lifespan_context = knowledge_lifespan
+
+
+async def _close_knowledge() -> None:
+    """Close what `_open_knowledge` opened on this loop. Phase 37."""
+    global _KNOWLEDGE, _KNOWLEDGE_LOOP
+    if _KNOWLEDGE is None:
+        return
+    store, index, _embedder = _KNOWLEDGE
+    _KNOWLEDGE = None
+    _KNOWLEDGE_LOOP = None
+    await index.stop()
+    await store.close()
+
+
 async def _make_knowledge_stage() -> tuple[KnowledgeStore | None, KnowledgeRetriever | None]:
     """Connect the knowledge base and build the retrieval stage.
 
@@ -1250,23 +1362,8 @@ async def _make_knowledge_stage() -> tuple[KnowledgeStore | None, KnowledgeRetri
         logger.warning("KB_ENABLED is false — answering without a knowledge base")
         return None, None
 
-    # Phase 12: shared across sessions and warmed at startup, so a phone call
-    # does not spend its first second loading a model the process already has.
-    embedder = shared_embedder(CONFIG.embedding_model)
-    # Load the weights before the caller says anything. A no-op once the
-    # process has loaded them; without it the first question of the call pays
-    # for the model load on top of its own latency.
-    await embedder.warm_up()
-
-    store = await KnowledgeStore.connect(
-        CONFIG.kb_database_url,
-        dimensions=embedder.dimensions,
-        embed_model=embedder.model_name,
-    )
-    documents, chunks = await store.counts()
-    logger.info(f"Knowledge base: {documents} document(s), {chunks} chunk(s)")
-
-    return store, KnowledgeRetriever(store, embedder, CONFIG)
+    store, index, embedder = await _open_knowledge()
+    return store, KnowledgeRetriever(index, embedder, CONFIG)
 
 
 def _telephony_params() -> FastAPIWebsocketParams:
@@ -1368,17 +1465,15 @@ async def _preflight() -> None:
 
     if not CONFIG.kb_enabled:
         return
-    embedder = shared_embedder(CONFIG.embedding_model)
-    await embedder.warm_up()
-    store = await KnowledgeStore.connect(
-        CONFIG.kb_database_url,
-        dimensions=embedder.dimensions,
-        embed_model=embedder.model_name,
-    )
-    try:
-        documents, chunks = await store.counts()
-    finally:
-        await store.close()
+    # Phase 37: the same open the first session will do — pool, in-memory
+    # index, embedder — so a misconfigured knowledge base fails here, loudly.
+    # Closed again before this loop ends (see `_KNOWLEDGE_LOOP`); the runner's
+    # first session opens it on its own loop and every later session shares
+    # it. A session used to open its own pool, 7 s to a hosted database.
+    _store, index, _embedder = await _open_knowledge()
+    documents, chunks = await index.counts()
+    described = index.describe()
+    await _close_knowledge()
 
     if chunks == 0:
         logger.warning(
@@ -1386,7 +1481,7 @@ async def _preflight() -> None:
             "Load documents with:  uv run ingest.py add <file>"
         )
     else:
-        logger.info(f"Knowledge base OK | {documents} document(s), {chunks} chunk(s)")
+        logger.info(f"Knowledge base OK | {described}")
 
 
 def _report_sales() -> None:
@@ -1552,4 +1647,9 @@ if __name__ == "__main__":
     # (its tokens, Inter, light and dark), served from this origin. Registered
     # before `main()` mounts the vendor's bundle, so these paths come first.
     install_client_theme(app, Path(__file__).resolve().parent / "web")
+    # Phase 37: open the knowledge base on the runner's own event loop before
+    # the first session, and close it at shutdown. Without this the first
+    # session opened it — measured at 29 s to the hosted database on a
+    # contended pooler, after the person had connected.
+    _install_knowledge_lifespan(app)
     main()

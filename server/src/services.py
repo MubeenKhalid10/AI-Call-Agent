@@ -205,15 +205,22 @@ def make_llm(config: Config, system_instruction: str | None = None):
 _REASONING_MODEL_MARKERS = ("qwen3", "qwen-3", "gpt-oss", "deepseek-r1", "minimax", "qwq")
 
 
-def reasoning_extra(config: Config) -> dict[str, str]:
+def reasoning_extra(config: Config) -> dict[str, dict[str, object]]:
     """The request extras that keep a reasoning model's thinking out of the answer.
 
-    Only for Groq and only for a model that reasons: the parameter is Groq's
-    own, and a model that does not reason may refuse it. `LLM_REASONING_FORMAT=off`
-    sends nothing (the provider's default), for a model or an account where the
-    parameter is not accepted.
+    Only for Groq and Cerebras, and only for a model that reasons: the
+    parameters are the providers' own, and a model that does not reason may
+    refuse them. `LLM_REASONING_FORMAT=off` sends nothing (the provider's
+    default), for a model or an account where the parameter is not accepted.
+
+    Groq takes `reasoning_format` (hidden / parsed). Cerebras keeps the
+    reasoning in its own response field already, so nothing leaks into the
+    spoken answer; the problem there is the budget: verified 2026-09-16 with a
+    direct request, qwen-3.8-27b spent the whole `max_tokens` thinking and
+    returned no content. Cerebras's switch is `disable_reasoning: true`, and
+    "parsed" (keep the reasoning, apart from the answer) is its default.
     """
-    if config.llm_provider != "groq" or config.llm_reasoning_format == "off":
+    if config.llm_reasoning_format == "off":
         return {}
     model = (config.llm_model or "").lower()
     if not any(marker in model for marker in _REASONING_MODEL_MARKERS):
@@ -221,7 +228,11 @@ def reasoning_extra(config: Config) -> dict[str, str]:
     # The SDK takes provider-specific parameters through `extra_body`, not as
     # keyword arguments of its own; Pipecat merges `Settings.extra` into the
     # `create()` call as given.
-    return {"extra_body": {"reasoning_format": config.llm_reasoning_format}}
+    if config.llm_provider == "groq":
+        return {"extra_body": {"reasoning_format": config.llm_reasoning_format}}
+    if config.llm_provider == "cerebras" and config.llm_reasoning_format == "hidden":
+        return {"extra_body": {"disable_reasoning": True}}
+    return {}
 
 
 class _RetryToLog(logging.Handler):

@@ -3,24 +3,45 @@ name = "Ai-Voice-Agent"
 version = "0.1.0"
 description = "Voice AI bot built with Pipecat"
 requires-python = ">=3.11"
+# The base set is what the *application* imports — the page, the dashboard and
+# the automation API over PostgreSQL (`src/app`, `api/index.py`): what Vercel
+# installs (`uv sync --no-dev`, no extras) into a function bundle that must
+# stay under 500 MB. Everything the bot, the campaign engine and the knowledge
+# base's embedder need is the `voice` extra below.
 dependencies = [
+    # aiohttp, httpx, loguru, python-multipart and websockets used to arrive
+    # through pipecat-ai; the application imports them itself, so they are named.
+    "aiohttp>=3.13",
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    # The knowledge base's local embedder (src/embeddings.py), an ONNX model:
+    # the deployed knowledge routes embed uploads and searches too.
     "fastembed>=0.8.0",
+    "httpx>=0.28",
+    "loguru>=0.7",
     "pgvector>=0.3",
     # Google's libphonenumber, for turning whatever a CSV contains into E.164.
     # Not hand-rolled on purpose: the requirement is to never turn an ambiguous
     # number into a confidently wrong one, and that is a data problem (per-country
     # lengths, prefixes, carrier codes) rather than a parsing one.
     "phonenumbers>=9.0.38",
+    "pypdf>=6.16.2",
+    "python-dotenv>=1.2.3",
+    "python-multipart>=0.0.20",
+    "tzdata>=2026.3",
+    "uvicorn>=0.52.4",
+    "websockets>=15",
+]
+
+[project.optional-dependencies]
+# The voice stack: the bot, the campaign engine's calls, the knowledge base's
+# embedder. `uv sync --all-extras` installs it (once; `uv run` keeps it);
+# Vercel never does.
+voice = [
     # `websocket` is what carries the telephony transport: a phone call arrives
     # as a websocket of the carrier's audio, which Pipecat's FastAPI websocket
     # transport and its per-carrier serializers handle. See src/telephony/.
     "pipecat-ai[anthropic,cartesia,deepgram,elevenlabs,evals,google,runner,silero,webrtc,websocket]>=1.4.0",
-    "pypdf>=6.16.2",
-    "python-dotenv>=1.2.3",
-    "tzdata>=2026.3",
-    "uvicorn>=0.52.4",
 ]
 
 [dependency-groups]
@@ -28,6 +49,12 @@ dev = [
     "pyright>=1.1.404,<2",
     "ruff>=0.12.11,<1",
 ]
+
+[tool.vercel]
+# Root Directory `server`: the application as one function (README, "Deploying
+# the application to Vercel"). Named so that `app.py` (no top-level `app`) is
+# never taken for the entry.
+entrypoint = "api.index:app"
 
 [tool.ruff]
 line-length = 100

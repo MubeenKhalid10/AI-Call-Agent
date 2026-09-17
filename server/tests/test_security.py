@@ -46,7 +46,7 @@ SERVER = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SERVER))
 sys.path.insert(0, str(SERVER / "tests"))
 
-for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY"):
+for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "CARTESIA_API_KEY"):
     os.environ.setdefault(_name, "not-used-by-these-checks")
 os.environ["KB_ENABLED"] = "false"
 
@@ -327,6 +327,26 @@ def check_http() -> None:
     check("a wildcard CORS origin is refused", any("wildcard" in p for p in cors_problems(("*",))))
     check("an origin with a path is refused", cors_problems(("https://app.example.com/x",)))
     check("a real origin is fine", not cors_problems(("https://app.example.com", "http://localhost:3000")))
+    # The two list settings are comma-separated, as `.env.example` and the README
+    # (`SECURITY_TRUSTED_PROXIES=0.0.0.0/0,::/0` behind Vercel) say; the sales
+    # lists' pipe is accepted too.
+    from src.config import SecurityConfig
+    saved = {k: os.environ.get(k) for k in ("SECURITY_TRUSTED_PROXIES", "SECURITY_CORS_ORIGINS", "DASHBOARD_USERS", "DASHBOARD_AUTH_DISABLED")}
+    try:
+        os.environ["SECURITY_TRUSTED_PROXIES"] = "0.0.0.0/0,::/0"
+        os.environ["SECURITY_CORS_ORIGINS"] = "https://app.example.com, https://ops.example.com|http://localhost:3000"
+        os.environ["DASHBOARD_AUTH_DISABLED"] = "true"
+        os.environ.pop("DASHBOARD_USERS", None)
+        env_problems: list[str] = []
+        parsed = SecurityConfig.from_env(env_problems)
+        check("SECURITY_TRUSTED_PROXIES is comma-separated", parsed.trusted_proxies == ("0.0.0.0/0", "::/0") and not env_problems, "; ".join(env_problems))
+        check("SECURITY_CORS_ORIGINS is comma-separated (a pipe works too)", parsed.cors_origins == ("https://app.example.com", "https://ops.example.com", "http://localhost:3000"))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     class _Req:
         def __init__(self, headers: dict[str, str]) -> None:

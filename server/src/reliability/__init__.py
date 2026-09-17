@@ -58,6 +58,9 @@ test against fixed inputs, which is what `tests/test_reliability.py` does.
 
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .guardrails import (
     CallingWindow,
     CampaignGuards,
@@ -94,8 +97,36 @@ from .retry import (
     read_classifier,
     write_classifier,
 )
-from .supervisor import Reason, ServiceHealth, SessionSupervisor
-from .usage import CallUsage, CostRates, ModelUsage, UsageObserver, estimate_cost
+
+if TYPE_CHECKING:
+    from .supervisor import Reason, ServiceHealth, SessionSupervisor
+    from .usage import CallUsage, CostRates, ModelUsage, UsageObserver, estimate_cost
+
+# The supervisor and the usage observer are Pipecat observers: they import its
+# frames at module load. Only the bot uses them, so they are resolved on first
+# access (PEP 562) rather than imported here — the application (the dashboard,
+# the automation API, the Vercel function) takes `check_health`, the retry
+# policies and the logging from this package without loading Pipecat.
+_LAZY = {
+    "Reason": ".supervisor",
+    "ServiceHealth": ".supervisor",
+    "SessionSupervisor": ".supervisor",
+    "CallUsage": ".usage",
+    "CostRates": ".usage",
+    "ModelUsage": ".usage",
+    "UsageObserver": ".usage",
+    "estimate_cost": ".usage",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "DATABASE_POLICY",

@@ -47,6 +47,7 @@ hello", because retrieval runs on every turn and most turns are not questions.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from loguru import logger
@@ -56,6 +57,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from .config import Config
 from .embeddings import Embedder
+from .knowledge_index import KnowledgeIndex
 from .knowledge_store import KnowledgeStore, Match
 from .prompts import (
     KNOWLEDGE_BLOCK_FOOTER,
@@ -207,7 +209,7 @@ class KnowledgeRetriever(FrameProcessor):
 
     def __init__(
         self,
-        store: KnowledgeStore,
+        store: KnowledgeStore | KnowledgeIndex,
         embedder: Embedder,
         config: Config,
         **kwargs,
@@ -215,7 +217,9 @@ class KnowledgeRetriever(FrameProcessor):
         """Create the retriever.
 
         Args:
-            store: The connected knowledge base.
+            store: The connected knowledge base, or (Phase 37, what `bot.py`
+                passes) the in-memory `KnowledgeIndex` over it — the same
+                `counts()` and `search()` either way.
             embedder: Embedder for the query. Must be the same model the stored
                 documents were embedded with; `KnowledgeStore` enforces that.
             config: Supplies `kb_top_k`, `kb_min_score` and the query heuristic.
@@ -228,6 +232,12 @@ class KnowledgeRetriever(FrameProcessor):
         self._min_score = config.kb_min_score
         self._short_query_words = config.kb_short_query_words
         self._log_retrieval = config.log_metrics
+        # Phase 37: how long one turn may wait for retrieval before answering
+        # without it. With the in-memory index (`knowledge_index.py`) a search
+        # is sub-millisecond and this never fires; it is the backstop for the
+        # database path, where a remote or exhausted pooler once held a turn
+        # for 6.6 s and the caller heard nothing.
+        self._timeout = float(getattr(config, "kb_timeout_secs", 2.0) or 0.0)
         # "always" is Phase 3's behaviour: search on every single turn. "auto"
         # skips the turns that cannot be an information request — see
         # `looks_like_information_request`.
@@ -289,7 +299,14 @@ class KnowledgeRetriever(FrameProcessor):
 
         started = time.monotonic()
         try:
-            matches = await self._retrieve(query)
+            matches = await self._retrieve_bounded(query)
+        except _RetrievalTimeout:
+            logger.warning(
+                f"KB | retrieval still running after {self._timeout:g}s — answering this turn "
+                "without the knowledge base"
+            )
+            self._note_retrieval("timeout")
+            return context
         except Exception as exc:
             # Postgres restarted, the network blinked, the model failed to load.
             # The caller is mid-sentence; log it and let the agent answer without
@@ -353,6 +370,24 @@ class KnowledgeRetriever(FrameProcessor):
         """
         return await self._retrieve(query.strip())
 
+    async def _retrieve_bounded(self, query: str) -> list[Match] | None:
+        """`_retrieve`, abandoned after `kb_timeout_secs`. Phase 37.
+
+        Not `asyncio.wait_for`: that waits for the cancelled task to finish,
+        and a database call stuck in a socket can take as long to cancel as it
+        took to stall — on 2026-09-17 Pipecat itself logged "timed out waiting
+        for task to cancel" on this stage. The task is cancelled and left to
+        end on its own; the turn moves on.
+        """
+        if self._timeout <= 0:
+            return await self._retrieve(query)
+        task = asyncio.create_task(self._retrieve(query), name="kb-retrieve")
+        done, _pending = await asyncio.wait({task}, timeout=self._timeout)
+        if task in done:
+            return task.result()
+        task.cancel()
+        raise _RetrievalTimeout
+
     async def _retrieve(self, query: str) -> list[Match] | None:
         """Search the knowledge base. None means the knowledge base is empty."""
         _documents, chunks = await self._store.counts()
@@ -367,6 +402,10 @@ class KnowledgeRetriever(FrameProcessor):
 
         vector = await self._embedder.embed_query_async(query)
         return await self._store.search(vector, limit=self._top_k, min_score=self._min_score)
+
+
+class _RetrievalTimeout(Exception):
+    """Retrieval did not finish inside `kb_timeout_secs`."""
 
 
 def _query_from(messages: list[LLMContextMessage], short_query_words: int) -> str | None:

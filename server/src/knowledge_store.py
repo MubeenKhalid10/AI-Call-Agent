@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 
 import asyncpg
+from .pooling import pool_options
 
 # Table names are interpolated nowhere; they are constants. Every value that
 # comes from outside this module travels as a bound parameter.
@@ -155,12 +156,16 @@ class KnowledgeStore:
         owns_pool = pool is None
         if pool is None:
             try:
+                # A transaction pooler (Supabase's port 6543) needs anonymous
+                # prepared statements; see src/pooling.py.
+                connect_dsn, extra = pool_options(dsn)
                 pool = await asyncpg.create_pool(
-                    dsn,
+                    connect_dsn,
                     min_size=min_size,
                     max_size=max_size,
                     timeout=timeout,
                     command_timeout=timeout,
+                    **extra,
                 )
             except (OSError, asyncpg.PostgresError) as exc:
                 raise KnowledgeStoreError(
@@ -413,6 +418,44 @@ class KnowledgeStore:
         )
         return result.rsplit(" ", 1)[-1] != "0"
 
+    async def all_chunks(self) -> list[tuple[str, str, str, int, list[float]]]:
+        """Every passage with its vector, as `(content, source, title, ordinal, embedding)`. Phase 37.
+
+        What `knowledge_index.KnowledgeIndex` loads. The vector column comes
+        back as its text form (`[0.1,0.2,...]`), which needs no pgvector codec
+        on the connection, and is parsed here.
+        """
+        # One bulk read at startup or in the background, never on a turn — so
+        # it gets its own, longer timeout than the pool's per-command one: on
+        # 2026-09-17 the hosted pooler took over 10 s to return 122 rows.
+        rows = await self._pool.fetch(
+            f"""
+            SELECT c.content, d.source, d.title, c.ordinal, c.embedding::text AS embedding
+            FROM {CHUNKS_TABLE} c
+            JOIN {DOCUMENTS_TABLE} d ON d.id = c.document_id
+            ORDER BY d.id, c.ordinal
+            """,
+            timeout=120.0,
+        )
+        return [
+            (row["content"], row["source"], row["title"], int(row["ordinal"]), _from_vector_literal(row["embedding"]))
+            for row in rows
+        ]
+
+    async def fingerprint(self) -> tuple[int, int, str | None]:
+        """What changes when a document is added, replaced or removed. Phase 37.
+
+        `(documents, chunks, latest ingest time)`: one cheap query the index's
+        refresher compares with the copy it holds.
+        """
+        row = await self._pool.fetchrow(
+            f"SELECT (SELECT count(*) FROM {DOCUMENTS_TABLE}) AS documents, "
+            f"       (SELECT count(*) FROM {CHUNKS_TABLE})    AS chunks, "
+            f"       (SELECT max(ingested_at) FROM {DOCUMENTS_TABLE}) AS latest"
+        )
+        latest = row["latest"]
+        return int(row["documents"]), int(row["chunks"]), latest.isoformat() if latest is not None else None
+
     async def counts(self) -> tuple[int, int]:
         """How much is in the knowledge base, as `(documents, chunks)`."""
         row = await self._pool.fetchrow(
@@ -487,6 +530,12 @@ def _to_vector_literal(vector: list[float]) -> str:
     extension is installed, which is a chicken-and-egg problem during setup.
     """
     return "[" + ",".join(repr(float(value)) for value in vector) + "]"
+
+
+def _from_vector_literal(text: str) -> list[float]:
+    """Parse pgvector's text form, `[1,2,3]`, back into floats. Phase 37."""
+    inner = text.strip()[1:-1].strip()
+    return [float(value) for value in inner.split(",")] if inner else []
 
 
 _DSN_PASSWORD = re.compile(r"(?<=://)([^:/@]+):([^@]*)(?=@)")

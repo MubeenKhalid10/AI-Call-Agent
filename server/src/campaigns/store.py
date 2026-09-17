@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
+from ..pooling import pool_options
 from loguru import logger
 
 from ..compliance.dnc import DncEntry, DncSource, parse_source
@@ -525,12 +526,16 @@ class CampaignStore:
         owns_pool = pool is None
         if pool is None:
             try:
+                # A transaction pooler (Supabase's port 6543) needs anonymous
+                # prepared statements; see src/pooling.py.
+                connect_dsn, extra = pool_options(dsn)
                 pool = await asyncpg.create_pool(
-                    dsn,
+                    connect_dsn,
                     min_size=min_size,
                     max_size=max_size,
                     timeout=timeout,
                     command_timeout=timeout,
+                    **extra,
                 )
             except (OSError, asyncpg.PostgresError) as exc:
                 raise CampaignStoreError(

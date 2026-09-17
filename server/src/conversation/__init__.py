@@ -48,6 +48,9 @@ and `tests/test_actions.py` are.
 
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .actions import (
     ActionBackend,
     ActionOutcome,
@@ -56,8 +59,6 @@ from .actions import (
     NullActionBackend,
 )
 from .brief import CallBrief, CampaignBrief, ProspectBrief
-from .conversation import SalesConversation
-from .director import ConversationDirector
 from .playbook import INSTRUCTION_PREFIX, build_system_instruction, opening_instruction, stage_block
 from .qualification import (
     BuyingTimeline,
@@ -83,8 +84,36 @@ from .sources import (
     resolve_brief,
 )
 from .states import ConversationState, ConversationStateMachine, StateTransition
-from .toolkit import AuditContext, strict_tool, validate_arguments
 from .transcript import Transcript, TranscriptEntry, render_transcript
+
+if TYPE_CHECKING:
+    from .conversation import SalesConversation
+    from .director import ConversationDirector
+    from .toolkit import AuditContext, strict_tool, validate_arguments
+
+# The conversation itself, the director (a `FrameProcessor`) and the toolkit
+# (Pipecat's function schemas) import Pipecat at module load. The briefs, the
+# qualification record, the results and the transcript — what the campaign
+# store, the dashboard and the REST API need — do not, so those three
+# modules are resolved on first access (PEP 562) and the application never
+# loads Pipecat for them.
+_LAZY = {
+    "SalesConversation": ".conversation",
+    "ConversationDirector": ".director",
+    "AuditContext": ".toolkit",
+    "strict_tool": ".toolkit",
+    "validate_arguments": ".toolkit",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "ERROR_CODES",

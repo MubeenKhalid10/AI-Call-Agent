@@ -395,6 +395,27 @@ def configure_logging(
                 "<level>{message}</level>{extra[_context]}"
             ),
         )
+    # Phase 37: `LOG_FILE` keeps a copy on disk, so a session that went wrong
+    # in a terminal nobody was watching can still be read afterwards. Plain
+    # text, rotated, a few generations kept; the terminal sink is unchanged.
+    log_file = (os.getenv("LOG_FILE") or "").strip()
+    if log_file:
+        # `{component}` in the path keeps the bot's and the application's
+        # lines apart when both read the same `.env`.
+        log_file = log_file.replace("{component}", component or "process")
+        logger.add(
+            log_file,
+            level=level,
+            format=(
+                "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+                + ("" if json_logs else "{extra[_context]}")
+            ),
+            colorize=False,
+            rotation="20 MB",
+            retention=5,
+            encoding="utf-8",
+            enqueue=True,
+        )
     _installed = True
 
 

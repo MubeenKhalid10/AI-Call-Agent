@@ -91,6 +91,7 @@ SCRIPTS = (
     ("test_tool_advertising", "the prompt budget and per-stage tool advertising (Phase 31)"),
     ("test_tool_round_trips", "which tools need a second LLM request (Phase 32)"),
     ("test_client_theme", "the browser client in the application's design (Phase 33)"),
+    ("test_knowledge_index", "the in-memory knowledge index and the retrieval timeout (Phase 37)"),
 )
 
 #: The go-live list, each item with what proves it automatically and what a

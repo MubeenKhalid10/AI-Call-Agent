@@ -40,7 +40,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import (
@@ -91,11 +91,17 @@ from ..security import (
     read_session,
     validate_registration,
 )
-from .engine import FAILED as ENGINE_FAILED
-from .engine import IDLE as ENGINE_IDLE
-from .engine import OFF as ENGINE_OFF
-from .engine import CampaignEngine, ProviderFactory
 from .proxy import install_bot_proxy
+
+if TYPE_CHECKING:
+    from .engine import CampaignEngine, ProviderFactory
+
+# `.engine` brings the scheduler, the carrier and Pipecat with it. It is imported
+# only when the engine runs in this process (below); a deployment that leaves the
+# dialling to `campaign.py run` — the Vercel function among them — never loads it.
+# The two values the application needs from it are mirrored here.
+ENGINE_FAILED = "failed"  # engine.FAILED
+ENGINE_OFF = "off"  # engine.OFF
 
 # Phase 25: how often the event stream re-reads the rows, how often it says
 # it is alive when nothing changed, and how long one stream may stay open.
@@ -105,6 +111,26 @@ STREAM_MAX_SECS = 3600.0
 
 APP_PATH = "/app"
 STATIC_PATH = "/static"
+# Phase 37: the script, stylesheet and fonts may be cached — by the browser
+# for five minutes and by a CDN in front of the application (Vercel's) for as
+# long as the deployment lives, since a new deployment starts a new cache.
+# Every other response stays `no-store` (`src/security/http.py`).
+STATIC_CACHE_CONTROL = "public, max-age=300, s-maxage=31536000, stale-while-revalidate=86400"
+
+
+class _CachedStaticFiles(StaticFiles):
+    """`StaticFiles` whose responses carry `STATIC_CACHE_CONTROL`.
+
+    Measured on the Vercel deployment on 2026-09-17: with every response
+    `no-store`, `app.js` (167 KB) went through the Python function on every
+    page load and took 1.8 s at the edge nearest the user; a cached copy is
+    served by the CDN in tens of milliseconds.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code: int = 200):  # noqa: D102 - Starlette's signature
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+        return response
 DASHBOARD_MOUNT = "/dashboard"
 AUTOMATION_MOUNT = "/automation"
 DEFAULT_APP_PORT = 7900  # Not 7860 (the bot), 7870 (the dashboard), 7880, 7890, 7895.
@@ -224,13 +250,20 @@ def create_unified_app(
             return await store_factory()
         return await CampaignStore.connect(config.database_url, min_size=1, max_size=2)
 
-    campaign_engine = CampaignEngine(
-        config,
-        store_factory=engine_store,
-        provider_factory=provider_factory,
-        enabled=engine if engine is not None else (config.worker.embedded and bool(config.database_url or store_factory)),
-        worker_id=worker_id,
-    )
+    engine_enabled = engine if engine is not None else (config.worker.embedded and bool(config.database_url or store_factory))
+    campaign_engine: CampaignEngine | _EngineOff
+    if engine_enabled:
+        from .engine import CampaignEngine
+
+        campaign_engine = CampaignEngine(
+            config,
+            store_factory=engine_store,
+            provider_factory=provider_factory,
+            enabled=True,
+            worker_id=worker_id,
+        )
+    else:
+        campaign_engine = _EngineOff(config.worker.shutdown_secs)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -364,7 +397,7 @@ def create_unified_app(
         return FileResponse(index, media_type="text/html; charset=utf-8", headers=page_headers)
 
     if web.is_dir():
-        app.mount(STATIC_PATH, StaticFiles(directory=str(web)), name="static")
+        app.mount(STATIC_PATH, _CachedStaticFiles(directory=str(web)), name="static")
 
     @app.get("/api/app/session")
     async def session(request: Request) -> JSONResponse:
@@ -604,7 +637,10 @@ def create_unified_app(
             if embedder_factory is not None:
                 state["embedder"] = embedder_factory()
             else:
-                from ..embeddings import shared_embedder
+                try:
+                    from ..embeddings import shared_embedder
+                except ImportError as exc:  # fastembed is the `voice` extra; a slim deployment may lack it
+                    raise _Refused(503, {"error": "the embedder (fastembed) is not installed on this server; add and search documents from a machine that has it (`uv run ingest.py add`)"}) from exc
 
                 state["embedder"] = shared_embedder(config.embedding_model)
         return state["embedder"]
@@ -808,6 +844,43 @@ def create_unified_app(
         # Last, so every route and mount above is matched first.
         state["proxy"] = install_bot_proxy(app, bot_url)
     return app
+
+
+class _EngineOff:
+    """The engine's surface when another process dials (`engine=False`, `WORKER_EMBEDDED=false`).
+
+    The same `state`, `start`, `stop` and `status()` as `CampaignEngine`, and the
+    same answer that one gives when disabled — without importing it, so the
+    application runs without the scheduler, the carrier or Pipecat installed.
+    """
+
+    state = ENGINE_OFF
+
+    def __init__(self, shutdown_secs: float) -> None:
+        self._shutdown_secs = shutdown_secs
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    def status(self) -> dict[str, Any]:
+        # The keys `CampaignEngine.status()` returns, with the values it has when off.
+        return {
+            "state": ENGINE_OFF,
+            "enabled": False,
+            "reason": "WORKER_EMBEDDED is off; `campaign.py run` places the calls",
+            "worker_id": None,
+            "provider": None,
+            "limits": None,
+            "in_flight": [],
+            "stopping": False,
+            "started_at": None,
+            "stopped_at": None,
+            "metrics": None,
+            "shutdown_secs": self._shutdown_secs,
+        }
 
 
 class _Refused(Exception):

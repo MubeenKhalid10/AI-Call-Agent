@@ -40,8 +40,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 import re
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,7 +52,7 @@ from typing import Any
 SERVER = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SERVER))
 sys.path.insert(0, str(SERVER / "tests"))
-for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY"):
+for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "CARTESIA_API_KEY"):
     os.environ.setdefault(_name, "not-used-by-these-checks")
 
 # Module level: the stand-in bot's handlers are annotated under `from __future__ import annotations`.
@@ -240,7 +242,7 @@ def check_one_login() -> None:
         created = client.post("/automation/api/v1/prospects", json={"first_name": "Sara", "last_name": "Ali", "phone": "0300 1234567"}, headers={"X-Requested-With": "fetch"})
         check("with the header the write goes through", created.status_code == 201 and created.json()["prospect"]["phone_normalized"] == "+923001234567", created.text[:120])
         config_view = client.get("/api/app/config").json()
-        check("the configuration view names the providers, the carrier, the sales defaults", config_view["providers"]["llm"].startswith("groq") and config_view["sales"]["agent_name"] == "Alex" and config_view["bot_url"] == BOT_URL and "telephony" in config_view)
+        check("the configuration view names the providers, the carrier, the sales defaults", config_view["providers"]["llm"].startswith(("groq", "cerebras")) and config_view["sales"]["agent_name"] == "Alex" and config_view["bot_url"] == BOT_URL and "telephony" in config_view)
         check("and no secret", ADMIN_KEY not in client.get("/api/app/config").text and SESSION_SECRET not in client.get("/api/app/config").text and "not-used-by-these-checks" not in client.get("/api/app/config").text)
         health = client.post("/api/app/health", headers={"X-Requested-With": "fetch"})
         check("the health check runs on demand for an operator", health.status_code == 200 and any(c["name"] == "database" for c in health.json()["components"]), health.text[:120])
@@ -590,6 +592,14 @@ def check_boundary() -> None:
     check("the browser talks only to its own origin", "http://" not in js.replace("http://127.0.0.1:7860", "") and "https://" not in js)
     check("every page the phase asks for has a route", all(f"#\\/{name}" in js for name in ("dashboard", "campaigns", "contacts", "calls", "live", "knowledge", "analytics", "settings")) and "campaigns\\/new" in js and "contacts\\/import" in js)
     check("importing never starts a call from the browser", "start" not in js.split("async function pageImport")[1].split("async function")[0].lower().replace("started", "").replace("starting", "").replace("start it", "").replace("you start", ""))
+    # Phase 36: the Vercel function (api/index.py, engine=False) must not load the
+    # scheduler, the carrier or Pipecat — none of them is installed there. A
+    # fresh interpreter, because this process has long since imported them all.
+    probe = "import json, sys; import api.index; print(json.dumps({m: m in sys.modules for m in ('src.app.engine', 'src.campaigns.runtime', 'src.telephony', 'pipecat')}))"
+    result = subprocess.run([sys.executable, "-c", probe], cwd=SERVER, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    loaded = json.loads(result.stdout.strip().splitlines()[-1]) if result.returncode == 0 and result.stdout.strip() else None
+    check("the Vercel entry (api/index.py) imports and builds the application", result.returncode == 0 and isinstance(loaded, dict), (result.stderr or result.stdout)[-300:])
+    check("without loading the engine, the scheduler, the telephony layer or Pipecat", loaded is not None and not any(loaded.values()), json.dumps(loaded))
 
 
 def check_bot_proxy() -> None:

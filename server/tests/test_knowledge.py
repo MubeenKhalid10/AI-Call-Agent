@@ -40,7 +40,7 @@ sys.path.insert(0, str(SERVER))
 # Set before importing config: these checks never reach a vendor, but `Config`
 # validates that the keys exist before it will build. Any real values already in
 # the environment are left alone.
-for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY"):
+for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "CARTESIA_API_KEY"):
     os.environ.setdefault(_name, "not-used-by-these-checks")
 os.environ["KB_ENABLED"] = "false"  # No database is opened here.
 

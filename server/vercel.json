@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["syd1"],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{tests/**,evals/**,eval-runs/**,drills/**,scripts/**,call-reports/**,recordings/**,.venv/**,**/__pycache__/**,**/*.log,**/*.csv,**/*.md,validation-report.*}"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ]
+}

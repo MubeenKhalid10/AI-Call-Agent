@@ -81,7 +81,7 @@ DEFAULT_MODELS = {
     "gemini": "gemini-3.6-flash",
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-5-mini",
-    "cerebras": "qwen/qwen3.6-27b",
+    "cerebras": "qwen-3.8-27b",
     "openrouter": "meta-llama/llama-3.3-70b-instruct",
     "mistral": "mistral-small-latest",
     "ollama": "llama3.2",
@@ -810,9 +810,12 @@ class SecurityConfig:
                 f"DASHBOARD_SESSION_SECRET must be at least {MIN_SECRET_LENGTH} characters; "
                 f"make one with `uv run security.py make-secret`."
             )
-        proxies = tuple(_list("SECURITY_TRUSTED_PROXIES")) or DEFAULT_TRUSTED_PROXIES
+        # Comma-separated, as `.env.example` and the README say (`0.0.0.0/0,::/0`
+        # behind Vercel): neither a CIDR nor an origin contains a comma, and
+        # `_list`'s pipe would have made the documented value one bad entry.
+        proxies = tuple(_comma_list("SECURITY_TRUSTED_PROXIES")) or DEFAULT_TRUSTED_PROXIES
         parse_networks(proxies, problems)
-        origins = tuple(_list("SECURITY_CORS_ORIGINS"))
+        origins = tuple(_comma_list("SECURITY_CORS_ORIGINS"))
         problems.extend(cors_problems(origins))
         return cls(
             users=users,
@@ -1917,6 +1920,13 @@ class Config:
     # chunks were cut with the old values.
     kb_chunk_words: int
     kb_chunk_overlap_words: int
+    # Phase 37: the turn path never waits on the database for knowledge. The
+    # bot holds the knowledge base in memory (`knowledge_index.py`), re-reads
+    # it every `kb_refresh_secs` when it changed, and a retrieval that still
+    # takes longer than `kb_timeout_secs` is abandoned for that turn.
+    kb_timeout_secs: float
+    kb_refresh_secs: float
+    kb_index_max_chunks: int
 
     # --- Campaigns (Phase 5) ------------------------------------------------
     # Where prospects, campaigns and call history live. Defaults to
@@ -2008,7 +2018,7 @@ class Config:
         problems: list[str] = []
 
         stt = os.getenv("STT_PROVIDER", "deepgram_flux").strip().lower()
-        llm = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+        llm = os.getenv("LLM_PROVIDER", "cerebras").strip().lower()
         tts = os.getenv("TTS_PROVIDER", "cartesia").strip().lower()
 
         for kind, chosen in (("stt", stt), ("llm", llm), ("tts", tts)):
@@ -2121,6 +2131,9 @@ class Config:
             kb_short_query_words=num.integer("KB_SHORT_QUERY_WORDS", 6, 0, 30),
             kb_chunk_words=num.integer("KB_CHUNK_WORDS", 60, 20, 2000),
             kb_chunk_overlap_words=num.integer("KB_CHUNK_OVERLAP_WORDS", 15, 0, 500),
+            kb_timeout_secs=num.number("KB_TIMEOUT_SECS", 2.0, 0.0, 30.0),
+            kb_refresh_secs=num.number("KB_REFRESH_SECS", 60.0, 0.0, 3600.0),
+            kb_index_max_chunks=num.integer("KB_INDEX_MAX_CHUNKS", 5000, 0, 200000),
             database_url=_clean(os.getenv("DATABASE_URL")) or kb_database_url,
             default_phone_region=_region("DEFAULT_PHONE_REGION", problems),
             campaign_max_attempts=num.integer("CAMPAIGN_MAX_ATTEMPTS", 3, 1, 20),
@@ -2384,6 +2397,18 @@ def _list(name: str) -> tuple[str, ...]:
     if raw is None:
         return ()
     return tuple(part.strip() for part in raw.split("|") if part.strip())
+
+
+def _comma_list(name: str) -> tuple[str, ...]:
+    """Read a comma-separated env var (a pipe is accepted too) into a tuple, dropping empty entries.
+
+    For values that are never sentences — networks, origins — where a comma is
+    the separator everybody expects and `.env.example` documents.
+    """
+    raw = _clean(os.getenv(name))
+    if raw is None:
+        return ()
+    return tuple(part.strip() for part in raw.replace("|", ",").split(",") if part.strip())
 
 
 def _clean(value: str | None) -> str | None:

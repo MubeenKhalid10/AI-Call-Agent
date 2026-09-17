@@ -31,7 +31,7 @@ from pathlib import Path
 SERVER = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SERVER))
 
-for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY"):
+for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "CARTESIA_API_KEY"):
     os.environ.setdefault(_name, "not-used-by-these-checks")
 os.environ["KB_ENABLED"] = "false"
 
@@ -223,6 +223,11 @@ def check_provider_side() -> None:
     check("a model that does not reason is sent nothing", reasoning_extra(config_with(LLM_PROVIDER="groq", GROQ_MODEL="llama-3.3-70b-versatile")) == {})
     check("parsed is passed through when asked for", reasoning_extra(config_with(LLM_PROVIDER="groq", GROQ_MODEL="qwen/qwen3.8-27b", LLM_REASONING_FORMAT="parsed")) == {"extra_body": {"reasoning_format": "parsed"}})
     check("off sends nothing", reasoning_extra(config_with(LLM_PROVIDER="groq", GROQ_MODEL="qwen/qwen3.8-27b", LLM_REASONING_FORMAT="off")) == {})
+    os.environ.setdefault("CEREBRAS_API_KEY", "not-used-by-these-checks")
+    check("Cerebras is asked to switch a qwen3 model's reasoning off", reasoning_extra(config_with(LLM_PROVIDER="cerebras", CEREBRAS_MODEL="qwen-3.8-27b")) == {"extra_body": {"disable_reasoning": True}})
+    check("Cerebras gpt-oss too", reasoning_extra(config_with(LLM_PROVIDER="cerebras", CEREBRAS_MODEL="gpt-oss-120b")) == {"extra_body": {"disable_reasoning": True}})
+    check("Cerebras parsed keeps its default", reasoning_extra(config_with(LLM_PROVIDER="cerebras", CEREBRAS_MODEL="qwen-3.8-27b", LLM_REASONING_FORMAT="parsed")) == {})
+    check("Cerebras off sends nothing", reasoning_extra(config_with(LLM_PROVIDER="cerebras", CEREBRAS_MODEL="qwen-3.8-27b", LLM_REASONING_FORMAT="off")) == {})
     try:
         config_with(LLM_PROVIDER="groq", LLM_REASONING_FORMAT="loud")
         check("an unknown value is a config problem", False)

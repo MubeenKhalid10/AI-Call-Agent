@@ -36,6 +36,9 @@ remains a change in one package that this one never notices.
 
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .briefing import (
     Briefing,
     CampaignConversationSink,
@@ -59,7 +62,6 @@ from .csv_import import (
     map_headers,
     parse_csv,
 )
-from .dialer import CampaignDialer, DialResult, map_call_status
 from .models import (
     ApiRequestRecord,
     AutomationEvent,
@@ -85,7 +87,6 @@ from .models import (
     WebhookOutcome,
 )
 from .phone import NormalizedPhone, PhoneQuality, normalize_phone, same_number
-from .recovery import AttemptRecovery, RecoveryReport
 from .results import (
     SCHEMA_VERSION,
     CallbackOutcome,
@@ -127,16 +128,55 @@ from .store import (
     QueueOutlook,
     campaign_concurrency,
 )
-from .webhooks import (
-    WebhookMetrics,
-    WebhookProcessor,
-    WebhookReceipt,
-    build_webhook_processor,
-    create_webhook_app,
-    create_webhook_router,
-    install_webhook_receiver,
-)
-from .worker import CampaignWorker, TickReport, WorkerMetrics, install_signal_handlers
+
+if TYPE_CHECKING:
+    from .dialer import CampaignDialer, DialResult, map_call_status
+    from .recovery import AttemptRecovery, RecoveryReport
+    from .webhooks import (
+        WebhookMetrics,
+        WebhookProcessor,
+        WebhookReceipt,
+        build_webhook_processor,
+        create_webhook_app,
+        create_webhook_router,
+        install_webhook_receiver,
+    )
+    from .worker import CampaignWorker, TickReport, WorkerMetrics, install_signal_handlers
+
+# The three modules that join campaigns to the carrier (`dialer`, `recovery`,
+# `webhooks`) import `src.telephony`, and the worker imports the dialer. The
+# scheduler (`runtime.py`), `campaign.py`, `webhooks.py` and the bot need them;
+# the application does not. They are resolved on first access (PEP 562), so
+# the dashboard, the automation API and the Vercel function import this package
+# without the telephony layer.
+_LAZY = {
+    "CampaignDialer": ".dialer",
+    "DialResult": ".dialer",
+    "map_call_status": ".dialer",
+    "AttemptRecovery": ".recovery",
+    "RecoveryReport": ".recovery",
+    "WebhookMetrics": ".webhooks",
+    "WebhookProcessor": ".webhooks",
+    "WebhookReceipt": ".webhooks",
+    "build_webhook_processor": ".webhooks",
+    "create_webhook_app": ".webhooks",
+    "create_webhook_router": ".webhooks",
+    "install_webhook_receiver": ".webhooks",
+    "CampaignWorker": ".worker",
+    "TickReport": ".worker",
+    "WorkerMetrics": ".worker",
+    "install_signal_handlers": ".worker",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "API_REQUESTS_TABLE",

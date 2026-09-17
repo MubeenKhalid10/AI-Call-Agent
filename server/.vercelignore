@@ -1,0 +1,19 @@
+# What a `vercel deploy` run from this directory does not upload. A Git deploy
+# already leaves out everything .gitignore does; this keeps a CLI upload the
+# same, .env above all. Keep src/, web/ and api/.
+.venv
+.env
+.env.*
+!.env.example
+tests
+evals
+eval-runs
+drills
+scripts
+call-reports
+recordings
+*.log
+**/*.log
+validation-report.*
+*.csv
+*.md

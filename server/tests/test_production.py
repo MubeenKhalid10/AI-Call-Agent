@@ -76,7 +76,7 @@ from zoneinfo import ZoneInfo
 SERVER = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SERVER))
 sys.path.insert(0, str(SERVER / "tests"))
-for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY"):
+for _name in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "CARTESIA_API_KEY"):
     os.environ.setdefault(_name, "not-used-by-these-checks")
 
 from dotenv import load_dotenv  # noqa: E402
