@@ -492,7 +492,7 @@
       <form id="register-form" novalidate>
         ${field("Name", inp("name", "", 'autocomplete="username" required autofocus maxlength="64"'), "Your sign-in name: letters, digits, dots, underscores or dashes.", { required: true })}
         ${field("Email", inp("email", "", 'type="email" autocomplete="email" required maxlength="254" inputmode="email"'), "", { required: true })}
-        ${field("Role", `<select name="role"><option value="viewer" selected>Viewer — see campaigns and results</option><option value="operator">Operator — run campaigns (needs approval)</option><option value="admin">Admin — full control (needs approval)</option></select>`, "Operator and Admin accounts need an administrator's approval before they can sign in.", { required: true })}
+        ${field("Role", `<select name="role"><option value="viewer" selected>Viewer — see campaigns and results</option><option value="admin">Admin — full control (needs approval)</option></select>`, "Operator and Admin accounts need an administrator's approval before they can sign in.", { required: true })}
         ${passwordField("Password", "password", 'autocomplete="new-password" required', "At least 8 characters.", { required: true })}
         ${passwordField("Confirm password", "confirm_password", 'autocomplete="new-password" required', "", { required: true })}
         <div class="form-actions"><button class="btn primary lg" type="submit" style="width:100%">Create account ${icon("arrow")}</button></div>
@@ -525,7 +525,7 @@
       if (!email) problems.email = "Enter an email address.";
       else if (!/^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/.test(email)) problems.email = "That does not look like an email address.";
       const role = f.role || "viewer";
-      if (!["viewer", "operator", "admin"].includes(role)) problems.role = "Choose viewer, operator or admin.";
+      if (!["viewer", "admin"].includes(role)) problems.role = "Choose viewer, admin.";
       if (!f.password) problems.password = "Enter a password.";
       else if (f.password.length < min) problems.password = `The password needs at least ${min} characters.`;
       if (!f.confirm_password) problems.confirm_password = "Enter the password again.";
