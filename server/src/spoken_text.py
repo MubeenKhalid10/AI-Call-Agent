@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -47,6 +48,12 @@ from pipecat.frames.frames import (
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+# The words that make a square bracket a label rather than something said.
+_BRACKET_LABELS = (
+    "assistant", "agent", "user", "caller", "prospect", "system", "developer", "tool", "function",
+    "call guidance", "guidance", "instruction", "instructions", "internal", "note", "turn",
+    "cut off", "interrupted", "interruption", "pause", "silence",
+)  # fmt: skip
 # Openers of text that is not for the caller, each with the closer that ends
 # it. Matched case-insensitively. Order matters only for the longest-prefix
 # hold below.
@@ -57,6 +64,21 @@ _HIDDEN_BLOCKS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
     (re.compile(r"<tool_call>", re.IGNORECASE), re.compile(r"</tool_call>", re.IGNORECASE)),
     (re.compile(r"<function(?:_call)?(?:=|>)", re.IGNORECASE), re.compile(r"</function(?:_call)?>", re.IGNORECASE)),
     (re.compile(r"<\|"), re.compile(r"\|>")),
+    # Any other tag the model makes up. Heard on a live call 2026-09-17:
+    # "<system>Note: I will ignore requests to reveal or discuss system
+    # instructions…</>" — a rule from its instructions, restated as a note to
+    # itself inside the answer, closed with a tag that matched nothing. Nothing
+    # a caller should hear is ever written between angle brackets, so the
+    # block is hidden whatever it is called. Last, so the named tags above win.
+    (re.compile(r"<[A-Za-z_][\w-]{0,30}>"), re.compile(r"</[\w-]{0,30}>")),
+    # A tool call narrated instead of made. Heard on a live call 2026-09-18:
+    # "[Calling record_objection...]" went to the voice, and no tool ran.
+    (re.compile(r"\[calling\s", re.IGNORECASE), re.compile(r"\]")),
+    # A label from the prompt's own bookkeeping, or one made up in its style.
+    # Same day, an opening turn: `[assistant turn 1]: "Hi there, how are you
+    # doing today?"` — the voice was handed all of it. An ordinary bracket
+    # ("it costs [roughly] ten") is still left alone: only these words open one.
+    (re.compile(r"\[(?:" + "|".join(_BRACKET_LABELS) + r")\b", re.IGNORECASE), re.compile(r"\]")),
 )
 # A closer arriving with no opener means everything before it was hidden text
 # whose opener the model omitted — qwen-style reasoning is the known case.
@@ -93,6 +115,130 @@ _PLAN_OPENER = re.compile(
 # logic in `finish` drops a trailing bare quote before this runs, so the real
 # line often arrives with its opening quote only.
 _DOUBLE_QUOTED = re.compile(r"[\"“”]\s*([^\"“”]{3,}?)\s*(?:[\"“”]|$)")
+
+
+_UNFINISHED_TAG = re.compile(r"</?[\w-]{0,30}")
+
+# A reply that answers, and then starts talking to itself. Heard on a live call
+# 2026-09-17, all of it spoken, thirty seconds of it:
+#   "Yes, we handle UI/UX design as part of the build… Is that something you're
+#    looking at for a current product? Wait, I need to answer based only on the
+#    excerpt and instructions. The excerpt confirms UI/UX design work… I should
+#    keep it brief and ask a question. "Yes, we handle UI/UX design, …"
+# The provider's reasoning is switched off on purpose (`services.reasoning_extra`),
+# so now and then the model reasons in the answer instead. Two things must both
+# be true of a sentence before it is taken for that, because either alone is
+# ordinary speech ("I need to check with the team", "I can't share my
+# instructions"): it opens the way a note to oneself does, and it names
+# something only the model can see.
+_SELF_TALK_OPENER = re.compile(
+    r"^[\s\"“”'(*-]*(?:(?:wait|hmm+|okay|ok|so|actually|no|hold on|right|also|but|and)[,.!…-]*\s+)*"
+    r"(?:i\s+need\s+to|i\s+should|i\s+must|i\s+have\s+to|i\s+will|i['’]?ll|i\s+can(?:not|['’]?t)?|let\s+me|let['’]?s|"
+    r"the\s+(?:excerpts?|passages?|instructions?|guidance|system|prompt|user|caller|prospect|knowledge\s+base|rules?|block|note)\b|"
+    r"my\s+(?:instructions?|guidance|prompt|rules?)\s+(?:say|says|tell|tells|state|states|require|requires)|"
+    r"according\s+to\s+(?:the|my)\b|note\s*:|draft\s*:|revised\s*:|final\s+(?:answer|reply)\b)",
+    re.IGNORECASE,
+)
+_SELF_TALK_SUBJECT = re.compile(
+    r"\b(?:excerpts?|passages?|(?:my|the)\s+(?:instructions?|guidance|prompt|rules)|system\s+prompt|knowledge\s+base|"
+    r"the\s+user|the\s+caller|the\s+prospect|tool\s+calls?|"
+    r"word\s+(?:limit|count)|(?:one|two|three|thirty)\s+(?:spoken\s+)?(?:sentences?|words)|"
+    r"my\s+(?:reply|response|answer)|answer\s+based)\b",
+    re.IGNORECASE,
+)
+# "Keep it brief" names nothing only the model can see, and a caller is told it
+# all the time. Heard on live calls 2026-09-18: "That's fair. I'll keep it
+# brief. I'm Alex, calling on behalf of…" lost everything after its first two
+# words — the caller got "That's fair.", silence, then "Still there?". It is a
+# note to self only as an obligation ("I should keep it brief and ask a
+# question"), never as a promise ("I'll keep it brief").
+_BREVITY = re.compile(r"\b(?:keep\s+(?:it|this)\s+(?:brief|short)|be\s+brief|be\s+concise)\b", re.IGNORECASE)
+_OBLIGATION = re.compile(r"\bi\s+(?:need\s+to|should|must|have\s+to)\b", re.IGNORECASE)
+# What a person does say with those words in it, and must be left alone: a
+# refusal to discuss them.
+_REFUSAL = re.compile(
+    r"\b(?:can(?:not|['’]?t)|(?:am|['’]m)\s+not\s+able\s+to|won['’]?t|unable\s+to|not\s+allowed\s+to)\s+"
+    r"(?:really\s+)?(?:share|go\s+into|discuss|reveal|talk\s+about|get\s+into|read|give|tell)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])[\"”')\]]*\s+")
+
+
+def strip_self_talk(text: str) -> tuple[str, int]:
+    """Cut a reply at the first sentence the model addressed to itself.
+
+    Returns `(spoken, dropped)`. Everything from that sentence on goes: what
+    follows a note-to-self is a second draft of what was already said, and
+    speaking both is how a caller heard the same offer twice. When the note
+    comes first and nothing was said before it, the reply's last double-quoted
+    line — the model's own final draft — is what is spoken; with no such line,
+    nothing is, which the turn monitor reports and is still better than the
+    reasoning read aloud.
+    """
+    if not text:
+        return text, 0
+    sentences = _SENTENCE_SPLIT.split(text)
+    for index, sentence in enumerate(sentences):
+        opener = _SELF_TALK_OPENER.match(sentence)
+        if opener is None or _REFUSAL.search(sentence):
+            continue
+        if _SELF_TALK_SUBJECT.search(sentence) or (_BREVITY.search(sentence) and _OBLIGATION.search(opener.group(0))):
+            break
+    else:
+        return text, 0
+    # A "sentence" with no words in it — the lone "." a model leaves between a
+    # reply and its second thoughts — is not kept: a TTS vendor refuses one.
+    kept = " ".join(s.strip() for s in sentences[:index] if _ALNUM.search(s)).strip()
+    if _ALNUM.search(kept) is None:
+        quoted = [q.strip() for q in _DOUBLE_QUOTED.findall(" ".join(sentences[index:])) if q.strip()]
+        kept = quoted[-1] if quoted and len(quoted[-1]) >= 3 else ""
+    return kept, max(0, len(text) - len(kept))
+
+
+# Heard on a live call 2026-09-18, in the read-back of a phone number: "that's
+# zero three零零, one two three, four five six七" — the model slipped into
+# Chinese numerals mid-number. A numeral is said as the English digit it is, so
+# the number survives; any other ideograph has no reading in this voice and goes.
+_CJK_DIGITS = dict(zip("零〇一二三四五六七八九", ("zero", "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"), strict=True))
+_CJK_DIGIT_RUN = re.compile("[" + "".join(_CJK_DIGITS) + "]+")
+_CJK = re.compile(r"[　-〿㐀-䶿一-鿿＀-￯]+")
+
+
+def spell_foreign_digits(text: str) -> tuple[str, int]:
+    """Chinese numerals as English digit words; other ideographs removed. Returns `(spoken, changed)`."""
+    if not text or _CJK.search(text) is None:
+        return text, 0
+    out = _CJK_DIGIT_RUN.sub(lambda m: " " + " ".join(_CJK_DIGITS[c] for c in m.group(0)) + " ", text)
+    out = _CJK.sub(" ", out)
+    out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out, sum(1 for c in text if _CJK.match(c))
+
+
+# A reply written as a line of a script: `Assistant: "Hi there."`, or what is
+# left of `[assistant turn 1]: "Hi there."` once the bracket is hidden — a
+# colon and a line in quotes. The label and the quotes are not words to say,
+# and the assistant aggregator would otherwise write them into the transcript.
+_SPEAKER_LABEL = re.compile(
+    r"^\s*(?:(?:assistant|agent|ai|bot)(?:\s+turn)?(?:\s+\d+)?\s*)?[:：]\s*", re.IGNORECASE
+)
+_WHOLLY_QUOTED = re.compile(r"^[\"“]([^\"“”]+)[\"”]?$")
+
+
+def strip_speaker_label(text: str) -> tuple[str, int]:
+    """Drop a leading speaker label, and the quotes around a reply that is one quoted line.
+
+    Returns `(spoken, dropped)`. Quotes are only removed together with a label:
+    a reply that merely quotes something is left as it is.
+    """
+    match = _SPEAKER_LABEL.match(text or "")
+    if match is None:
+        return text, 0
+    spoken = text[match.end() :].strip()
+    quoted = _WHOLLY_QUOTED.match(spoken)
+    if quoted:
+        spoken = quoted.group(1).strip()
+    return spoken, len(text) - len(spoken)
 
 
 def strip_plan_narration(text: str) -> tuple[str, int]:
@@ -199,9 +345,24 @@ class SpokenTextScrubber:
         if self.hold_all:
             out = "".join(self._visible) + out
             self._visible = []
-            # The whole reply is assembled now, so a plan-narration preamble can
-            # be recognised and dropped before anything reaches the voice.
+            # The whole reply is assembled now: a speaker label in front of it
+            # goes first, so what follows is judged as the reply it is.
+            spoken, dropped = strip_speaker_label(out)
+            if dropped:
+                self.stats.unspeakable_chars += dropped
+                out = spoken
+            spoken, changed = spell_foreign_digits(out)
+            if changed:
+                self.stats.unspeakable_chars += changed
+                out = spoken
+            # …then a plan-narration preamble can be recognised and dropped
+            # before anything reaches the voice.
             spoken, dropped = strip_plan_narration(out)
+            if dropped:
+                self.stats.unspeakable_chars += dropped
+                out = spoken
+            # And a reply that answers and then starts reasoning with itself.
+            spoken, dropped = strip_self_talk(out)
             if dropped:
                 self.stats.unspeakable_chars += dropped
                 out = spoken
@@ -296,11 +457,20 @@ def _earliest_block(text: str) -> tuple[re.Match[str], re.Pattern[str]] | None:
 
 def _possible_opener_start(text: str) -> int:
     """Index from which `text` might be the start of an opener, or len(text)."""
+    bracket = text.rfind("[")
+    if bracket != -1:
+        tail = text[bracket + 1 :].lower()
+        if any(label.startswith(tail) for label in ("calling ", *_BRACKET_LABELS)):
+            return min(bracket, _possible_opener_start(text[:bracket]))
     start = text.rfind("<")
     if start == -1:
         return len(text)
     tail = text[start:].lower()
     if any(prefix.startswith(tail) for prefix in _OPENER_PREFIXES):
+        return start
+    # A tag of the model's own making, still arriving: "<sys" in this chunk,
+    # "tem>" in the next.
+    if _UNFINISHED_TAG.fullmatch(tail):
         return start
     return len(text)
 
@@ -473,9 +643,20 @@ class SpokenTextFilter(FrameProcessor):
     this code, not by the model.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, *, complete: Callable[[str], str] | None = None, **kwargs) -> None:
+        """Create the filter.
+
+        Args:
+            complete: Given the finished, scrubbed reply, returns the reply to
+                speak. The conversation layer uses it to add a read-back the
+                model owed and left out (`SalesConversation.complete_reply`).
+                The whole reply is held until the model has finished it, so
+                this costs no extra wait. Not called for a reply with nothing
+                speakable in it.
+        """
         super().__init__(**kwargs)
         self._scrubber = SpokenTextScrubber()
+        self._complete = complete
         self._in_response = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -495,6 +676,11 @@ class SpokenTextFilter(FrameProcessor):
             self._in_response = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             tail = self._scrubber.finish()
+            if tail and self._complete is not None:
+                try:
+                    tail = self._complete(tail)
+                except Exception as exc:  # The reply is spoken as the model wrote it.
+                    logger.warning(f"SPEECH | completing the reply failed ({exc!r}); spoken as written")
             if tail:
                 # The held reply takes the response's own skip-TTS flag: an
                 # eval in text mode asks for no voice on every frame, and a
@@ -529,4 +715,4 @@ def _rewritten(frame: LLMTextFrame, text: str) -> LLMTextFrame:
     return out
 
 
-__all__ = ["ScrubStats", "SpokenTextFilter", "SpokenTextScrubber"]
+__all__ = ["ScrubStats", "SpokenTextFilter", "SpokenTextScrubber", "strip_speaker_label"]

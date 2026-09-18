@@ -225,6 +225,12 @@ class VoicemailDetector:
         self._turn_started_at: float | None = None
         self._turn_over_agent = False
         self._turns = 0
+        # A caller turn that waited for the agent to finish and had words in
+        # it: a person. A machine never waits, so from then on talking over
+        # the agent is a barge-in, not a recording, and the length rule is off.
+        # Found 2026-09-17: a live caller who answered the greeting and then
+        # interrupted for ten seconds was hung up on as a machine.
+        self._person_answered = False
         self._verdict: VoicemailVerdict | None = None
 
     @property
@@ -264,6 +270,8 @@ class VoicemailDetector:
         if not self._judging():
             return None
         text = str(transcript or "").strip()
+        if text and not over_agent and matched_phrase(text, self._phrases) is None:
+            self._person_answered = True
         if text:
             phrase = matched_phrase(text, self._phrases)
             if phrase is not None:
@@ -272,7 +280,7 @@ class VoicemailDetector:
                     f"the greeting said {phrase!r}",
                     transcript=text,
                 )
-        if self._max_greeting and started is not None and over_agent:
+        if self._max_greeting and started is not None and over_agent and not self._person_answered:
             length = self._clock() - started
             if length > self._max_greeting:
                 return self._decide(
@@ -290,6 +298,8 @@ class VoicemailDetector:
         call be dropped before a thirty-second recording has finished playing.
         """
         if self._turn_started_at is None or not self._max_greeting or not self._turn_over_agent:
+            return None
+        if self._person_answered:
             return None
         # The open turn is the (turns + 1)th; it must still be within the count.
         if not self._judging(open_turn=True):

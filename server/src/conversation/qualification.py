@@ -288,6 +288,19 @@ class QualificationRecord:
     transferred: bool = False
     """The call was handed to a person. Set only by a successful `transfer_to_human`."""
 
+    contact_phone: str | None = None
+    """A phone number they dictated on the call, as digits (`03001234567`).
+    Normalized by `spoken_values`; the words are in `contact_phone_heard`."""
+
+    contact_phone_heard: str | None = None
+    """The turn that number was read from, as transcribed."""
+
+    contact_email: str | None = None
+    """An email address they gave on the call, as a valid address."""
+
+    contact_email_heard: str | None = None
+    """The turn that address was read from, as transcribed."""
+
     notes: list[str] = field(default_factory=list)
 
     # --- Writing -----------------------------------------------------------
@@ -406,6 +419,10 @@ class QualificationRecord:
             parts.append(f"callback={self.callback_scheduled_for}")
         if self.transferred:
             parts.append("transferred")
+        if self.contact_phone:
+            parts.append(f"phone={self.contact_phone}")
+        if self.contact_email:
+            parts.append(f"email={self.contact_email}")
         return " | ".join(parts)
 
 

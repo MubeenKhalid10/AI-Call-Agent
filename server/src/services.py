@@ -372,7 +372,11 @@ def _make_tts_service(config: Config, provider: str, api_key: str | None):
         )
 
     if provider == "deepgram":
-        return DeepgramTTSService(api_key=api_key, text_aggregation_mode=mode)
+        return DeepgramTTSService(
+            api_key=api_key,
+            settings=DeepgramTTSService.Settings(voice=config.deepgram_tts_voice),
+            text_aggregation_mode=mode,
+        )
 
     if provider == "elevenlabs":
         if not config.elevenlabs_voice_id:

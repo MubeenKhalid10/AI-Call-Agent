@@ -48,6 +48,7 @@ hello", because retrieval runs on every turn and most turns are not questions.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 from loguru import logger
@@ -194,6 +195,49 @@ _BACKCHANNELS = frozenset(
 )
 
 
+# Questions that are not about the business, however they are phrased: talk
+# about the call itself, about the agent, and about what is behind it. Measured
+# 2026-09-17 against the deployment's own knowledge base: every one of these
+# passed the old gate (each has a "?" or an interrogative), and "how are you"
+# came back with four passages at 0.63, "is this a robot" at 0.62 and "which AI
+# model are you running on" at 0.68 — above a real question like "what do you
+# guys actually do" (0.57), so no score threshold separates them. The agent
+# then read a block saying the excerpts were its only facts on a turn that
+# asked nothing about the company. Matched against the normalised turn
+# (lower-case, punctuation gone, so "what's" is "what s").
+_CONVERSATIONAL = tuple(
+    re.compile(pattern)
+    for pattern in (
+        # Small talk and line checks.
+        r"\bhow (are|r) (you|u|things)\b|\bhow s (it going|things|your day|everything)\b"
+        r"|\bhow (have you been|you doing|is it going)\b",
+        r"\b(can|could|do) you hear me\b|\bare you (still )?there\b|\bis (this|now) a (good|bad) time\b",
+        r"\b(what|sorry what) (did|was that) you (just )?(say|said)\b|\bwhat did you (just )?say\b"
+        r"|\b(can|could) you (repeat|say) that\b|\bsay that again\b|\bcome again\b"
+        r"|\bi didn t (catch|hear|get) that\b",
+        # Who is calling and why: answered from the campaign facts, which are
+        # in the instructions on every turn.
+        r"\bwho (is|s) (this|that|calling|speaking)\b|\bwho am i (talking|speaking) (to|with)\b"
+        r"|\bwho are you\b|\bwhat (is|s|was) your name\b",
+        r"\bwhy are you calling\b|\bwhat (is|s) this (call )?(about|regarding)\b",
+        r"\bwhat time is it\b|\bwhat (is|s) the (time|date)\b|\bwhat day is it\b",
+        # A callback is an action, not a fact.
+        r"\b(can|could) you (call|ring|phone|try) (me )?(back|later|again)\b"
+        r"|\b(call|ring|phone|try) me (back )?(later|tomorrow|another time|next week)\b",
+        # Is it a person, and what is it made of. The honest answer to the
+        # first is in the instructions; the second is never in a document.
+        r"\b(are|r) (you|u) (an? )?(real |actual |live )?(person|human|robot|bot|machine|recording|computer|ai|a i|automated)\b",
+        r"\bis (this|that|it) (an? )?(real |actual |live )?(person|human|robot|bot|machine|recording|ai|a i|automated)\b",
+        r"\b(talking|speaking) (to|with) (an? )?(real |actual )?(person|human|robot|bot|machine|computer|ai|a i)\b",
+        r"\b(system|your|the) (prompt|prompts)\b|\byour (instructions|guidelines|script|rules|programming|settings)\b",
+        r"\b(which|what) (ai|a i|llm|model|language model)\b|\blanguage model\b|\bchat ?gpt\b|\bopen ?ai\b"
+        r"|\bwho (made|built|created|programmed|trained) you\b"
+        r"|\bwhat are you (built|running|based|trained) (on|with)\b|\bhow (were|are) you (made|built|trained|programmed)\b",
+        r"\b(api key|password|passcode|credentials?|login details)\b",
+    )
+)
+
+
 class KnowledgeRetriever(FrameProcessor):
     """Augments each inference with passages retrieved from the knowledge base.
 
@@ -249,6 +293,17 @@ class KnowledgeRetriever(FrameProcessor):
         # Told when a retrieval starts and how it ended, so the per-turn
         # breakdown has a KB figure; nothing else about retrieval changes.
         self.latency = None
+        # Set by `turns.BargeInGate` for the turn that interrupted the agent.
+        # A short follow-up is normally searched together with the caller's
+        # previous message; after a barge-in that message is the question the
+        # agent was cut off answering, and "Wait." paired with it retrieved the
+        # old answer's passages — the model then gave the old answer again
+        # (measured 2026-09-18). One turn only.
+        self._standalone_next = False
+
+    def search_next_turn_alone(self) -> None:
+        """The next caller turn is searched on its own words, not paired with the one before."""
+        self._standalone_next = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Intercept context frames on their way to the LLM.
@@ -278,14 +333,22 @@ class KnowledgeRetriever(FrameProcessor):
         should degrade the agent to Phase 2 behaviour, not end the call.
         """
         messages = list(context.messages)
-        query = _query_from(messages, self._short_query_words)
+        standalone, self._standalone_next = self._standalone_next, False
+        query = _query_from(messages, 0 if standalone else self._short_query_words)
         if query is None:
             return context
 
         if self.latency is not None:
             self.latency.retrieval_started()
 
-        if self._gated and not looks_like_information_request(query):
+        # The newest turn on its own decides whether this is talk: `query` may
+        # carry the previous message too (a short follow-up is paired with
+        # it), and "Are you a robot?" after a question about pricing is still
+        # not a question about pricing.
+        if self._gated and (
+            is_conversational(_latest_user_text(messages))
+            or not looks_like_information_request(query)
+        ):
             # Nothing is injected at all on a skipped turn, not even the
             # "nothing found" block: the point of skipping is that the turn was
             # never a question about the business, so a note telling the model
@@ -452,6 +515,47 @@ def _query_from(messages: list[LLMContextMessage], short_query_words: int) -> st
     return latest
 
 
+def _latest_user_text(messages: list[LLMContextMessage]) -> str:
+    """The newest user message as it was said, or an empty string."""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
+
+
+def _normalize(text: str) -> str:
+    """Lower-case, punctuation to spaces, whitespace collapsed."""
+    return " ".join(
+        "".join(character if character.isalnum() or character.isspace() else " " for character in text)
+        .lower()
+        .split()
+    )
+
+
+def is_conversational(text: str) -> bool:
+    """Whether this turn is talk about the call or the agent, not about the business.
+
+    The second half of the `KB_RETRIEVAL_MODE=auto` gate, and the narrow one:
+    `looks_like_information_request` lets every question through, because a
+    turn wrongly skipped costs the grounding; this names the questions that
+    are recognisably *not* about the company — "how are you", "who is this",
+    "are you a robot", "which model are you", "what is your system prompt" —
+    so they are answered as a person would answer them instead of from
+    passages that merely scored well.
+
+    A turn that also names a business topic is not conversational: "I'm fine,
+    how are you — what does the onboarding cost?" is searched.
+    """
+    normalized = _normalize(text or "")
+    if not normalized:
+        return False
+    if not any(pattern.search(normalized) for pattern in _CONVERSATIONAL):
+        return False
+    return not any(stem in normalized for stem in _BUSINESS_WORDS)
+
+
 def looks_like_information_request(text: str) -> bool:
     """Whether this turn could be asking for a fact about the business.
 
@@ -480,11 +584,7 @@ def looks_like_information_request(text: str) -> bool:
     if "?" in text:
         return True
 
-    normalized = " ".join(
-        "".join(character if character.isalnum() or character.isspace() else " " for character in text)
-        .lower()
-        .split()
-    )
+    normalized = _normalize(text)
     if not normalized:
         return False
     if normalized in _BACKCHANNELS:

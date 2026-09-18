@@ -656,6 +656,18 @@ async def check_booking() -> None:
     result = await known.calls("book_meeting", start="2026-09-07T10:00")
     check("a known email from the prospect record is used", result["success"] and known.calendar.booked[0][1].email == "sk@meridian.example")
 
+    # Phase 40: the calendar gets an address, however the model wrote it down.
+    spoken = World(calendar=FakeCalendar(requires_email=True))
+    await spoken.calls("check_calendar_availability", day="2026-09-07")
+    result = await spoken.calls("book_meeting", start="2026-09-07T10:00", attendee_email="John dot Smith two at Gmail dot com")
+    check("an email passed as it was spoken is booked as an address", result["success"] and spoken.calendar.booked[0][1].email == "john.smith2@gmail.com", repr(spoken.calendar.booked))
+
+    dictated = World(brief=brief_for(email="sk@meridian.example"), calendar=FakeCalendar(requires_email=True))
+    await dictated.conversation.note_user_turn("Use my other email, it's sarah underscore k at outlook dot com.")
+    await dictated.calls("check_calendar_availability", day="2026-09-07")
+    result = await dictated.calls("book_meeting", start="2026-09-07T10:00")
+    check("an address dictated on the call beats the one on file", result["success"] and dictated.calendar.booked[0][1].email == "sarah_k@outlook.com", repr(dictated.calendar.booked))
+
     # A local booking *is* the row: if it cannot be written, nothing was booked.
     local = World(store=FakeStore(failing=True))
     local.calendar.name = "local"

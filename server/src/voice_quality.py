@@ -404,6 +404,26 @@ class TurnMonitor:
         barge_in = self._barge_in_for(turn)
         return barge_in is not None
 
+    def note_discarded_turn(self) -> None:
+        """The turn just closed interrupted the bot with a noise the recogniser wrote down ("m").
+
+        `turns.BargeInGate` held it back, so no response is coming and none is
+        owed: it is a spurious interruption, not a failed turn.
+        """
+        turn = self._last_turn()
+        if turn is None:
+            return
+        turn.spurious = True
+        barge_in = self._barge_in_for(turn)
+        if barge_in is not None:
+            barge_in.spurious = True
+        logger.warning(
+            event(
+                "turn.spurious_interruption",
+                outcome=f"turn {turn.index} interrupted the bot with no words in it ({turn.transcript!r})",
+            )
+        )
+
     def note_noise_resume(self) -> None:
         """The agent was asked to continue after a spurious interruption."""
         self.noise_resumes += 1
@@ -543,7 +563,7 @@ class TurnMonitor:
         for turn in self.turns:
             if turn.failed or turn.stopped_at is None or turn.responded_at is not None:
                 continue
-            if not turn.transcript or turn.tool_call:
+            if not turn.transcript or turn.tool_call or turn.spurious:
                 continue
             waited = now - (turn.stopped_at or now)
             if waited < self._timeout:

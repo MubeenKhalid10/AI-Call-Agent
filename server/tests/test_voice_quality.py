@@ -488,6 +488,32 @@ def check_voicemail_detector() -> None:
     clock.tick(12.0)
     check("and the open-turn watchdog leaves it alone too", detector.check_open_turn() is None)
 
+    # 2026-09-17, found by `phone_drill.py overlap`: a live caller answered the
+    # greeting, then interrupted the agent for ten seconds, and was hung up on.
+    clock = Clock()
+    detector = VoicemailDetector(max_greeting_secs=8.0, window_secs=30.0, clock=clock)
+    detector.note_connected()
+    detector.note_user_turn_started(over_agent_audio=False)
+    clock.tick(2.0)
+    detector.note_user_turn_stopped("Tell me a bit about what you do and how it works.")
+    detector.note_user_turn_started(over_agent_audio=True)
+    clock.tick(9.0)
+    check("somebody who waited for the agent and answered is a person: a long barge-in after that is not a recording",
+          detector.check_open_turn() is None)
+    check("at the end of that turn too",
+          detector.note_user_turn_stopped("sorry hang on a second I have got someone at the door and I cannot really talk") is None)
+
+    clock = Clock()
+    detector = VoicemailDetector(max_greeting_secs=8.0, window_secs=30.0, clock=clock)
+    detector.note_connected()
+    detector.note_user_turn_started(over_agent_audio=False)
+    clock.tick(1.0)
+    detector.note_user_turn_stopped("")
+    detector.note_user_turn_started(over_agent_audio=True)
+    clock.tick(9.0)
+    check("a turn with no words in it establishes nobody: the length rule still applies",
+          detector.check_open_turn() is not None)
+
     clock = Clock()
     detector = VoicemailDetector(max_greeting_secs=8.0, window_secs=30.0, clock=clock)
     detector.note_connected()

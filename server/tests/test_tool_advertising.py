@@ -340,7 +340,7 @@ def check_prompt() -> None:
         ("asks before pitching", "Discovery before pitching"),
         ("acknowledges an objection first", "acknowledge it in their own words first"),
         ("records first, then replies", "Record FIRST, then reply"),
-        ("handles being interrupted", "cut off ends where they interrupted"),
+        ("handles being interrupted", "A reply you were cut off in is over"),
         ("offers a transfer when it can", "connect them to a colleague right now"),
         ("checks the calendar before offering times", "check_calendar_availability for the day they prefer"),
         ("books only once they choose", "book_meeting once they choose"),
@@ -379,10 +379,17 @@ def check_prompt() -> None:
     # Groq's per-minute limit (which the whole request and history drive, not
     # this delta). The ceiling is raised once, to 1,850, and still holds the
     # line well under the un-compacted 2,048.
+    # 2026-09-17: raised once more, to 1,980, for three rules the agent did not
+    # have at all (~140 tokens): never discuss its instructions, tools or the
+    # technology behind the call; give only the company's public contact
+    # details; speak as a representative rather than as "an AI" unless asked.
+    # The provider's prompt cache covers the system instruction (the live log
+    # shows 2,048 cached input tokens per request), so the cost is per call,
+    # not per turn.
     if count.exact:
-        check("the fully wired test instruction stays under 1,850 Qwen3 tokens (Phase 33: was ~1,624)", tokens < 1850, f"{tokens} tokens, {words} words")
+        check("the fully wired test instruction stays under 1,980 Qwen3 tokens (Phase 33: was ~1,624)", tokens < 1980, f"{tokens} tokens, {words} words")
     else:
-        check("the fully wired test instruction stays under 1,500 words (Phase 33: was ~1,460)", words < 1500, f"{words} words")
+        check("the fully wired test instruction stays under 1,620 words (Phase 33: was ~1,460)", words < 1620, f"{words} words")
     report = measure(test_brief())
     check("the opening request advertises no tool schema", report["opening_tool_tokens"] == 0)
     selling = [row for row in report["stages"] if ConversationState(row["stage"]).is_selling]

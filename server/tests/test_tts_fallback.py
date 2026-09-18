@@ -60,6 +60,7 @@ from pipecat.frames.frames import (  # noqa: E402
 from pipecat.observers.base_observer import FramePushed  # noqa: E402
 from pipecat.processors.frame_processor import FrameDirection  # noqa: E402
 from pipecat.services.cartesia.tts import CartesiaTTSService  # noqa: E402
+from pipecat.services.deepgram.tts import DeepgramTTSService  # noqa: E402
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService  # noqa: E402
 from pipecat.services.tts_service import TTSService  # noqa: E402
 from pipecat.tests.utils import SleepFrame, run_test  # noqa: E402
@@ -402,7 +403,7 @@ async def check_no_secrets_in_logs() -> None:
 
 def check_config_and_factory() -> None:
     print("\n=== configuration: off by default, explicit providers untouched, the switcher only when asked ===")
-    saved = {k: os.environ.get(k) for k in ("TTS_PROVIDER", "TTS_FALLBACK_ENABLED", "TTS_FALLBACK_PROVIDER", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID")}
+    saved = {k: os.environ.get(k) for k in ("TTS_PROVIDER", "TTS_FALLBACK_ENABLED", "TTS_FALLBACK_PROVIDER", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "DEEPGRAM_TTS_VOICE")}
 
     def env(**values: str | None) -> None:
         for key in saved:
@@ -420,6 +421,16 @@ def check_config_and_factory() -> None:
 
         env(TTS_PROVIDER="elevenlabs", ELEVENLABS_API_KEY="k", ELEVENLABS_VOICE_ID="v")
         check("TTS_PROVIDER=elevenlabs builds ElevenLabs directly, no switcher", isinstance(make_tts(Config.from_env()), ElevenLabsTTSService))
+
+        # Deepgram as the voice: one line in .env, the speech-to-text key, a default voice.
+        env(TTS_PROVIDER="deepgram")
+        config = Config.from_env()
+        tts = make_tts(config)
+        check("TTS_PROVIDER=deepgram builds Deepgram directly, on the key it already has", isinstance(tts, DeepgramTTSService) and config.tts_api_key == os.environ["DEEPGRAM_API_KEY"])
+        check("…with Pipecat's default voice", tts._settings.voice == "aura-2-helena-en", repr(tts._settings.voice))
+        check("…and the summary line names it", "TTS=deepgram |" in config.describe(), config.describe().split(" | ")[2])
+        env(TTS_PROVIDER="deepgram", DEEPGRAM_TTS_VOICE="aura-2-thalia-en")
+        check("DEEPGRAM_TTS_VOICE chooses the voice", make_tts(Config.from_env())._settings.voice == "aura-2-thalia-en")
 
         env(TTS_FALLBACK_ENABLED="true", ELEVENLABS_API_KEY="k", ELEVENLABS_VOICE_ID="v")
         config = Config.from_env()

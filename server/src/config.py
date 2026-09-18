@@ -66,8 +66,11 @@ from .security.roles import Role, UserDirectory
 from .security.sessions import DEFAULT_TTL_SECS as DEFAULT_SESSION_TTL_SECS
 from .security.sessions import MIN_SECRET_LENGTH
 
-DEFAULT_CARTESIA_VOICE_ID = "86e30c1d-714b-4074-a1f2-1cb6b552fb49"
+DEFAULT_CARTESIA_VOICE_ID = "41e97793-a58d-40b7-8430-83465e186f94"
 DEFAULT_ELEVENLABS_MODEL = "eleven_flash_v2_5"
+# Pipecat's own default for `DeepgramTTSService`. Deepgram names a voice and its
+# model in one string (aura-2-<voice>-<language>); override with DEEPGRAM_TTS_VOICE.
+DEFAULT_DEEPGRAM_TTS_VOICE = "aura-2-helena-en"
 
 # Default model per LLM provider. Override with <PROVIDER>_MODEL in .env.
 # Provider catalogues change; if one of these 404s, set the env var instead.
@@ -149,6 +152,12 @@ SUPPORTED = {
 # for it), and phone networks cancel echo on the line. This setting is for when
 # none of that is enough, which in practice means a laptop on speaker.
 ECHO_SUPPRESSION_MODES = ("off", "greeting", "always")
+
+# What `BARGE_IN_TRIGGER` accepts on the Flux path. "vad" lets the local VAD cut
+# the agent off while it is speaking (about 0.2 s after the caller's first
+# sound); "flux" waits for Deepgram's StartOfTurn, which needs recognised words
+# and was measured 0.8-1.1 s after the caller began. See `turns.py`.
+BARGE_IN_TRIGGERS = ("vad", "flux")
 
 # What `LLM_REASONING_FORMAT` accepts, for a Groq reasoning model. "hidden" asks
 # the provider for the final answer only; "parsed" keeps the reasoning in its
@@ -1814,6 +1823,7 @@ class Config:
     cartesia_voice_id: str
     elevenlabs_voice_id: str
     elevenlabs_model: str
+    deepgram_tts_voice: str
     # Phase 30. A second TTS provider on standby for the call: when the primary
     # fails before it has produced audio for what it was asked to say (HTTP 402
     # quota, a connection or timeout failure, a provider error), the rest of the
@@ -1845,6 +1855,8 @@ class Config:
     # the non-Flux path, where we own the turn-start strategy; 0 disables the
     # guard so any speech interrupts.
     interrupt_min_words: int
+    # Flux path only: what cuts the agent off mid-sentence. See `BARGE_IN_TRIGGERS`.
+    barge_in_trigger: str
     # What to do about the agent hearing itself through the caller's speakers.
     # "off" (the default) keeps full barge-in and assumes something upstream is
     # cancelling the echo — headphones, the browser's AEC, or a phone network.
@@ -2099,6 +2111,8 @@ class Config:
             elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "").strip(),
             elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "").strip()
             or DEFAULT_ELEVENLABS_MODEL,
+            deepgram_tts_voice=os.getenv("DEEPGRAM_TTS_VOICE", "").strip()
+            or DEFAULT_DEEPGRAM_TTS_VOICE,
             tts_fallback_enabled=tts_fallback_enabled,
             tts_fallback_provider=tts_fallback_provider,
             tts_fallback_api_key=tts_fallback_api_key,
@@ -2108,6 +2122,7 @@ class Config:
             flux_eot_timeout_ms=num.optional_int("FLUX_EOT_TIMEOUT_MS", 500, 30_000),
             flux_eager_eot_threshold=num.optional_float("FLUX_EAGER_EOT_THRESHOLD", 0.0, 1.0),
             interrupt_min_words=num.integer("INTERRUPT_MIN_WORDS", 0, 0, 10),
+            barge_in_trigger=_choice("BARGE_IN_TRIGGER", "vad", BARGE_IN_TRIGGERS, problems),
             echo_suppression=_choice("ECHO_SUPPRESSION", "off", ECHO_SUPPRESSION_MODES, problems),
             vad_confidence=num.number("VAD_CONFIDENCE", 0.7, 0.0, 1.0),
             vad_start_secs=num.number("VAD_START_SECS", 0.2, 0.0, 2.0),
@@ -2253,7 +2268,10 @@ class Config:
                 if self.flux_eager_eot_threshold is not None
                 else "off"
             )
-            return f"Turn-taking: Flux semantic end-of-turn (eot={eot}, eager={eager})"
+            return (
+                f"Turn-taking: Flux semantic end-of-turn (eot={eot}, eager={eager}), "
+                f"barge-in on {self.barge_in_trigger}"
+            )
         guard = (
             f", barge-in needs {self.interrupt_min_words} words" if self.interrupt_min_words else ""
         )

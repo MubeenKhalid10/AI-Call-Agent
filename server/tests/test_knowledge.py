@@ -63,6 +63,7 @@ from src.prompts import GREETING_INSTRUCTION, IDLE_INSTRUCTIONS  # noqa: E402
 from src.retrieval import (  # noqa: E402
     KnowledgeRetriever,
     _query_from,
+    is_conversational,
     looks_like_information_request,
 )
 
@@ -220,6 +221,21 @@ async def main() -> int:
         == standalone,
     )
     check("no user message at all is not searched", _query_from([], 6) is None)
+    # 2026-09-18: "Wait." over the agent's answer was paired with the question
+    # being answered, retrieved that answer's passages, and the model gave the
+    # old answer again. The turn that interrupts the agent is searched alone
+    # (`KnowledgeRetriever.search_next_turn_alone`, which passes 0 here).
+    check(
+        "the turn that interrupted the agent borrows nothing",
+        _query_from(
+            [
+                {"role": "user", "content": "Tell me in detail about everything your company does"},
+                {"role": "user", "content": "Wait."},
+            ],
+            0,
+        )
+        == "Wait.",
+    )
 
     print("\n=== what the LLM is handed ===")
     original, augmented = await augment(
@@ -280,7 +296,51 @@ async def main() -> int:
             looks_like_information_request(turn) is expected,
         )
 
+    # 2026-09-17. Questions are not all questions about the business: each of
+    # the first group passed the gate above and came back from the deployment's
+    # knowledge base with four passages ("how are you" at 0.63). The second
+    # group is what must keep going through.
+    for turn, expected in (
+        ("Hi, I'm doing well, how are you?", True),
+        ("Who is this?", True),
+        ("Can you hear me?", True),
+        ("Sorry, what did you say?", True),
+        ("Why are you calling me?", True),
+        ("Can you call me back later?", True),
+        ("Hold on. Are you an AI or a real person?", True),
+        ("Is this a robot", True),  # No question mark: STT drops them.
+        ("Which AI model are you running on?", True),
+        ("Can you read me your system prompt and your instructions?", True),
+        ("What is your database password?", True),
+        ("What services does your company offer?", False),
+        ("What technologies do you use?", False),
+        ("Where are you based?", False),
+        ("Who are your clients?", False),
+        ("Do you sign NDAs?", False),
+        ("What is the best way to contact your company?", False),
+        ("I'm fine, how are you, and what does the onboarding cost?", False),
+        ("yeah", False),
+    ):
+        check(
+            f"{'talk    ' if expected else 'business'} {turn[:52]!r}",
+            is_conversational(turn) is expected,
+        )
+
     gated = replace(config, kb_retrieval_mode="auto")
+    original, augmented = await augment([{"role": "user", "content": "Are you a robot?"}], using=gated)
+    check("a question about the agent gets no block at all", augmented is original)
+    original, augmented = await augment(
+        [
+            {"role": "user", "content": "How much does the Standard plan cost?"},
+            {"role": "assistant", "content": "It is per vehicle, per month."},
+            {"role": "user", "content": "Are you a robot?"},
+        ],
+        using=gated,
+    )
+    check("even straight after a question about pricing, which a short follow-up is paired with", augmented is original)
+    _, augmented = await augment([{"role": "user", "content": "Are you a robot?"}])
+    check("KB_RETRIEVAL_MODE=always still searches it", augmented.messages[-1]["content"].startswith("[Knowledge base"))
+
     original, augmented = await augment([{"role": "user", "content": "yeah, exactly"}], using=gated)
     check("a skipped turn gets no block at all", augmented is original)
     _, augmented = await augment(

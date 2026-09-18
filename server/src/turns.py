@@ -26,39 +26,103 @@ is no server-side turn signal, so Pipecat's defaults apply: VAD and the first
 transcript start the turn, and the local Smart Turn v3 model — a small ONNX
 classifier that scores whether an utterance sounds finished — stops it.
 
-VAD is configured on **both** paths. On the Flux path it no longer drives
-turn-taking, but it still emits the speech-start and speech-stop frames that
-`metrics.py` measures response latency between, so removing it would cost us the
-measurements Phase 2 is meant to produce.
+VAD is configured on **both** paths. On the Flux path it does not decide where
+a turn ends, but it still emits the speech-start and speech-stop frames that
+`metrics.py` measures response latency between — and, since 2026-09-17, it is
+what cuts the agent off when the caller talks over it (`VADBargeInStartStrategy`
+below): Flux's StartOfTurn needs recognised words and was measured arriving
+0.8–1.1 s after the caller began, which is a whole second of the agent talking
+over them.
 
-This module also owns `mark_interrupted_reply`, the cleanup after a barge-in.
-Stopping the agent mid-sentence is only half of handling an interruption; the
-other half is what the half-sentence does to the conversation record afterwards.
+This module also owns the cleanup after a barge-in: `discard_interrupted_reply`
+and `BargeInGate`. Stopping the agent mid-sentence is only half of handling an
+interruption; the other half is that the interrupted reply is over for good —
+its half-sentence leaves the context, a wordless interruption starts no
+inference, and nothing picks the old answer back up.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    Frame,
+    InterruptionFrame,
+    LLMContextFrame,
+    VADUserStartedSpeakingFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
+from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_mute import (
     AlwaysUserMuteStrategy,
     BaseUserMuteStrategy,
     MuteUntilFirstBotCompleteUserMuteStrategy,
 )
+from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
+from pipecat.turns.user_start.external_user_turn_start_strategy import (
+    ExternalUserTurnStartStrategy,
+)
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
     MinWordsUserTurnStartStrategy,
 )
+from pipecat.turns.user_stop.external_user_turn_stop_strategy import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from .config import Config
-from .prompts import INTERRUPTED_REPLY_MARKER
 
 # Providers whose service pushes its own turn-strategy recommendation, which we
 # must not override.
 _SERVER_SIDE_TURN_PROVIDERS = frozenset({"deepgram_flux"})
+
+
+class VADBargeInStartStrategy(BaseUserTurnStartStrategy):
+    """Open the caller's turn from the local VAD, but only over the agent's voice.
+
+    On the Flux path the turn normally opens on Flux's StartOfTurn, which is
+    sent once Flux has recognised words. Measured 2026-09-17 with
+    `tests/phone_drill.py barge_in`: 766 ms and 1078 ms after the caller began,
+    and the agent was still audible 922 ms into the interruption — while the
+    pipeline, once told, stopped it in 16 ms. The wait was all detection.
+
+    Silero reports speech `VAD_START_SECS` (0.2 s) after it begins, so while the
+    agent is speaking this strategy opens the turn — and with it the
+    interruption that stops the TTS and clears the queued audio — on that
+    instead. Flux's own StartOfTurn then arrives into a turn that is already
+    open and is ignored; its EndOfTurn still closes the turn, so *where a turn
+    ends* is decided exactly as before.
+
+    While the agent is quiet this does nothing, deliberately: there is nothing
+    to stop, and leaving the start to Flux means a cough in a silence never
+    opens a turn that has to time out empty. Silero is a speech classifier, not
+    an energy gate, so steady line noise does not trip it (`phone_drill.py
+    noise` checks that); a sound it does take for speech stops the agent, the
+    turn closes with no words, and the agent stays quiet until somebody speaks
+    (`BargeInGate`; the idle nudge is what eventually breaks a long silence).
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._bot_speaking = False
+
+    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+        """STOP when the caller spoke over the agent, CONTINUE otherwise."""
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+        elif isinstance(frame, VADUserStartedSpeakingFrame) and self._bot_speaking:
+            logger.debug("BARGE-IN | the caller spoke over the agent; interrupting on the VAD")
+            await self.trigger_user_turn_started()
+            return ProcessFrameResult.STOP
+        return ProcessFrameResult.CONTINUE
 
 
 def make_vad_analyzer(config: Config) -> SileroVADAnalyzer:
@@ -137,8 +201,11 @@ def make_user_aggregator_params(config: Config) -> LLMUserAggregatorParams:
     )
 
 
-def mark_interrupted_reply(context: LLMContext) -> None:
-    """Flag the last assistant message as cut off by the caller.
+_SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*(?=\s|$)")
+
+
+def discard_interrupted_reply(context: LLMContext) -> None:
+    """Drop the unfinished sentence of the reply the caller just cut off.
 
     Barge-in leaves the agent's own half-finished sentence in the context, and
     that fragment poisons the next reply. Measured here on Groq/Qwen: with
@@ -146,39 +213,142 @@ def mark_interrupted_reply(context: LLMContext) -> None:
         assistant: "Sunlight looks white, but it's actually made up of"
         user:      "Sorry, never mind. What is the capital of France?"
 
-    in the context, the model answered with two tokens — "The" — and stopped. Its
-    truncated answer then joined the context, and the turn after that came back
-    three tokens long. One interruption degrades every reply that follows it.
+    in the context, the model answered with two tokens — "The" — and stopped,
+    imitating a turn it read as one it chose to end there. Until 2026-09-18 the
+    fragment was kept and a bracketed note in English was appended to say it
+    had been cut off. That note was text in the model's own history: it could
+    be echoed into a reply, and with it there the model treated the old answer
+    as unfinished business and went back to it.
 
-    Marking the fragment is what breaks that. The model can only read a bare
-    fragment as a turn it chose to end there, which sets the pattern it goes on to
-    imitate; the marker says the sentence was interrupted, which is both true and
-    the thing that stops the imitation. The system prompt alone does not fix this
-    — it was tried first, and the model kept truncating.
-
-    The marker text is meta, in brackets, and never spoken: it is the last thing
-    in an assistant turn the model is being asked to continue *past*, not a style
-    to copy. The eval suite is what checks that stays true.
+    An interruption now invalidates the reply instead. The sentences the
+    caller heard to the end stay — they were said — and the dangling one goes;
+    a reply cut before its first sentence ended is removed whole. That the
+    reply was interrupted is state, not prose: `AssistantTurnStoppedMessage.
+    interrupted`, the transcript entry's `interrupted` flag, and the one-turn
+    guidance `SalesConversation` raises from it.
     """
 
-    def append_marker(messages):
-        for message in reversed(messages):
+    def drop_fragment(messages):
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
             content = message.get("content")
-            if isinstance(content, str) and content and INTERRUPTED_REPLY_MARKER not in content:
-                message["content"] = content + INTERRUPTED_REPLY_MARKER
-                logger.debug(f"Marked interrupted reply: {message['content']!r}")
+            if isinstance(content, str) and content and not message.get("tool_calls"):
+                ends = list(_SENTENCE_END.finditer(content))
+                heard = content[: ends[-1].end()].strip() if ends else ""
+                if heard:
+                    message["content"] = heard
+                else:
+                    del messages[index]
+                logger.debug(f"BARGE-IN | interrupted reply kept as {heard!r} (was {content!r})")
             # Only the most recent assistant message can be the interrupted one.
             break
         return messages
 
-    context.transform_messages(append_marker)
+    context.transform_messages(drop_fragment)
+
+
+# Sounds a recogniser writes down that are not words: what Flux makes of a
+# cough, a hum or a breath over the agent's voice ("m", "Mm.", "Uh"). Yes-sounds
+# ("mhm", "uh-huh") are deliberately absent — those answer something.
+_NON_WORDS = frozenset("m mm mmm mmmm hm hmm hmmm h uh uhh um umm er erm ah ahh oh eh huh".split())
+
+
+def is_meaningful_speech(text: str | None) -> bool:
+    """Whether a transcript holds at least one word, as opposed to a noise written down."""
+    words = re.sub(r"[^\w\s]", " ", (text or "").lower()).split()
+    return any(word not in _NON_WORDS for word in words)
+
+
+class BargeInGate(FrameProcessor):
+    """What happens after the caller cuts the agent off, decided from state.
+
+    Sits directly after the user aggregator. It knows one thing the context
+    does not — that the turn now arriving *interrupted the agent* — from the
+    frames themselves: an `InterruptionFrame` that passed while the bot was
+    speaking. Two decisions follow from it:
+
+    * The interrupting turn held no words (Flux wrote a hum down as "m"): the
+      turn is removed from the context and **no inference is started**. The
+      agent has stopped and stays stopped until somebody says something.
+      Measured 2026-09-18 before this existed: "m" went to the model with the
+      knowledge base attached and the agent talked for another 8 s, 2.5 s
+      after a sound nobody meant as a turn.
+    * It held words: `on_barge_in_turn` runs first (the retriever is told not
+      to pair this turn with the question the agent was answering — "Wait."
+      paired with it retrieved the old answer's passages and the model gave
+      the old answer again), then the turn goes on to inference unchanged.
+    """
+
+    def __init__(
+        self,
+        context: LLMContext,
+        *,
+        on_barge_in_turn: Callable[[], None] | None = None,
+        on_discarded_turn: Callable[[str], None] | None = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._context = context
+        self._on_barge_in_turn = on_barge_in_turn
+        self._on_discarded_turn = on_discarded_turn
+        self._bot_speaking = False
+        self._barged_in = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Track the barge-in; hold back a wordless interrupting turn."""
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+        elif isinstance(frame, InterruptionFrame) and self._bot_speaking:
+            self._barged_in = True
+        elif isinstance(frame, LLMContextFrame) and direction == FrameDirection.DOWNSTREAM and self._barged_in:
+            text = _latest_user_text(frame.context)
+            if text and not is_meaningful_speech(text):
+                # Still barged-in: the next real utterance is the interrupting one.
+                self._discard(text)
+                return
+            self._barged_in = False
+            if self._on_barge_in_turn:
+                self._on_barge_in_turn()
+
+        await self.push_frame(frame, direction)
+
+    def _discard(self, text: str) -> None:
+        def drop_latest_user(messages):
+            if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "user":
+                del messages[-1]
+            return messages
+
+        self._context.transform_messages(drop_latest_user)
+        logger.info(f"BARGE-IN | the interruption held no words ({text!r}); discarded, staying silent")
+        if self._on_discarded_turn:
+            self._on_discarded_turn(text)
+
+
+def _latest_user_text(context: LLMContext) -> str:
+    messages = context.messages
+    if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "user":
+        content = messages[-1].get("content")
+        return content.strip() if isinstance(content, str) else ""
+    return ""
 
 
 def _turn_strategies(config: Config) -> UserTurnStrategies | None:
     """Choose turn strategies, or None to accept the STT service's recommendation."""
     if config.stt_provider in _SERVER_SIDE_TURN_PROVIDERS:
+        if config.barge_in_trigger == "vad":
+            # Flux's own pair — the two External strategies are exactly what
+            # its recommendation consists of, so server-side end-of-turn
+            # detection stays on — with the VAD barge-in in front of them.
+            return UserTurnStrategies(
+                start=[VADBargeInStartStrategy(), ExternalUserTurnStartStrategy()],
+                stop=[ExternalUserTurnStopStrategy()],
+            )
         # See the module docstring: Flux supplies its own, and overriding them
         # here would quietly disable server-side end-of-turn detection.
         return None

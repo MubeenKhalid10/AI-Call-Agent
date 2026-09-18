@@ -42,6 +42,7 @@ backend confirmed, and neither does the agent.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -59,6 +60,8 @@ from .playbook import (
     END_CALL_OVERRIDE,
     HUMAN_QUESTION_OVERRIDE,
     INSTRUCTION_PREFIX,
+    INTERRUPTED_HOLD_OVERRIDE,
+    INTERRUPTED_OVERRIDE,
     REJECTION_OVERRIDE,
     SEND_INFORMATION_OVERRIDE,
     TIME_MENTIONED_CALLBACK_ONLY_OVERRIDE,
@@ -68,7 +71,9 @@ from .playbook import (
     WANTS_HUMAN_OVERRIDE,
     WANTS_HUMAN_TRANSFER_OVERRIDE,
     build_system_instruction,
+    email_heard_override,
     opening_instruction,
+    phone_heard_override,
     stage_block,
 )
 from .qualification import (
@@ -99,6 +104,7 @@ from .results import (
 )
 from .signals import Signal, SignalReport, detect
 from .sink import ConversationSink, LoggingSink
+from .spoken_values import ensure_read_back, find_email, find_phone, normalize_email, speakable
 from .states import ConversationState, ConversationStateMachine
 from .timeparse import label, label_day, parse_clock, parse_day, parse_when, resolve_timezone
 from .toolkit import AuditContext
@@ -117,6 +123,16 @@ _REQUESTABLE = {
     "meeting_request": ConversationState.MEETING_REQUEST,
     "greeting": ConversationState.GREETING,
 }
+
+# An interrupting turn that is nothing but a request to pause: "Wait.", "Hold on
+# a second", "Sorry, one moment". Anything after it ("Hold on, where is your
+# office?") makes it an ordinary interruption with a question in it.
+_HOLD_ONLY = re.compile(
+    r"^(?=.*\b(?:wait|stop|hold|hang|second|sec|moment|minute)\b)"
+    r"(?:(?:sorry|okay|ok|hey|no|please|just|wait|stop|hold on|hang on|hold up|one (?:second|sec|moment|minute)"
+    r"|a (?:second|sec|moment|minute)|give me|excuse me)\W*)+$",
+    re.IGNORECASE,
+)
 
 # A callback or a booking asked for less than this far ahead is "now", and now
 # is not a time anybody can be called back at.
@@ -191,6 +207,20 @@ class SalesConversation:
         # What the detectors heard in the latest user turn, for the tools that
         # answer it: a no the model files as an objection is still a no.
         self._turn_signals: frozenset[Signal] = frozenset()
+        # What the agent last said, which is where "what number can we reach
+        # you on?" lives, and the first part of a number whose turn ended on a
+        # pause before the number did. Both read by `_note_contact_details`.
+        self._last_agent_text = ""
+        # Whether the agent's latest reply was cut off by the caller. The next
+        # caller turn is answered under `INTERRUPTED_OVERRIDE`, once.
+        self._cut_off = False
+        self._phone_pending = ""
+        # A number or address the caller just dictated and has not heard back
+        # yet. The model is asked to confirm it; `complete_reply` makes sure.
+        self._read_back_owed = ""
+        # Every distinct number and address given, in order — their own and a
+        # colleague's both reach the notes; the record's fields hold the latest.
+        self._contacts_given: list[tuple[str, str]] = []
         self._dnc_recorded = False
         self._dnc_stored = False
         self._finished = False
@@ -330,10 +360,21 @@ class SalesConversation:
         # The words the detectors run over are the words the transcript keeps,
         # so the record and the transcript cannot disagree about what was said.
         self._transcript.add_user(text)
+        if self._cut_off:
+            # State, not text: the reply before this turn was interrupted.
+            self._cut_off = False
+            self._pending_overrides.append(
+                INTERRUPTED_HOLD_OVERRIDE if _HOLD_ONLY.match(text.strip()) else INTERRUPTED_OVERRIDE
+            )
+        self._read_back_owed = ""
+        self._note_contact_details(text)
         report = detect(text)
         self._turn_signals = frozenset(report.matched)
         if not report:
             return report
+        if report.forces_do_not_call or Signal.END_CALL in report:
+            # The reply to this is an apology or a goodbye, and nothing else.
+            self._read_back_owed = ""
 
         for signal in report.matched:
             override = self._override_for(signal)
@@ -365,6 +406,67 @@ class SalesConversation:
             await self.do_not_call(reason=f"said {phrase!r}", trigger="signal")
 
         return report
+
+    def _note_contact_details(self, text: str) -> None:
+        """Record a phone number or an email address the caller just dictated.
+
+        The transcript keeps their words; the record gets the value a CRM can
+        use (`spoken_values`), and the model is handed that value for its reply
+        rather than left to count "double one" itself. Pure string work, tens
+        of microseconds, so it adds nothing a caller could hear.
+        """
+        phone = find_phone(text, context=self._last_agent_text, pending=self._phone_pending)
+        # The rest of a number split across two turns: keep both halves' words.
+        continued = bool(phone and self._phone_pending and phone.value.startswith(self._phone_pending))
+        # A turn can end on the pause between two groups, so a number that is
+        # still short of a full mobile number may get its rest in the next turn.
+        short = bool(phone) and (not phone.complete or len(phone.value.lstrip("+")) < 10)
+        self._phone_pending = phone.value if phone and short else ""
+        if phone:
+            heard = phone.raw
+            if continued and self._record.contact_phone_heard:
+                heard = f"{self._record.contact_phone_heard} … {phone.raw}"
+            self._record.contact_phone = phone.value
+            self._record.contact_phone_heard = heard
+            if continued and self._contacts_given and self._contacts_given[-1][0] == "phone number":
+                self._contacts_given.pop()
+            if phone.complete and ("phone number", phone.value) not in self._contacts_given:
+                self._contacts_given.append(("phone number", phone.value))
+            logger.info(f"CONTACT | phone {phone.value}{'' if phone.complete else ' (so far)'} <- {phone.raw!r}")
+            self._pending_overrides.append(
+                phone_heard_override(phone.value, speakable(phone.value), complete=phone.complete)
+            )
+            if phone.complete:
+                self._read_back_owed = phone.value
+        email = find_email(text, context=self._last_agent_text)
+        if email:
+            self._record.contact_email = email.value
+            self._record.contact_email_heard = email.raw
+            if ("email address", email.value) not in self._contacts_given:
+                self._contacts_given.append(("email address", email.value))
+            logger.info(f"CONTACT | email {email.value} <- {email.raw!r}")
+            self._pending_overrides.append(email_heard_override(email.value, speakable(email.value)))
+            self._read_back_owed = email.value
+
+    def complete_reply(self, reply: str) -> str:
+        """The reply the model wrote, with the read-back it owed if it left it out.
+
+        Called by the spoken-text filter on the finished reply, before any of
+        it reaches the voice. The model is asked to confirm a dictated number
+        or address and mostly does (five live turns in six, 2026-09-18); the
+        sixth is settled here, in code, rather than by a firmer instruction —
+        firmer wording is what made the model narrate a tool call (Failed §53).
+        A response with no words in it (a tool call on its own) leaves the
+        read-back owed to the response that follows the tool's result.
+        """
+        value = self._read_back_owed
+        if not value or not any(c.isalnum() for c in reply):
+            return reply
+        self._read_back_owed = ""
+        completed = ensure_read_back(reply, value)
+        if completed != reply:
+            logger.info(f"CONTACT | reply adjusted so that {value} is read back, in words")
+        return completed
 
     def _override_for(self, signal: Signal) -> str | None:
         """The override block a signal raises, given what this session can do.
@@ -433,6 +535,8 @@ class SalesConversation:
             interrupted: Whether the caller cut the reply off.
         """
         self._agent_turns += 1
+        self._cut_off = interrupted
+        self._last_agent_text = text or self._last_agent_text
         self._transcript.add_assistant(text, interrupted=interrupted)
 
     def closing_line_needs_hangup(self, text: str = "", *, interrupted: bool = False) -> bool:
@@ -862,7 +966,16 @@ class SalesConversation:
                 data={"offered": self.offered_slots[:4]},
             )
 
-        email = (attendee_email or "").strip() or (self._brief.prospect.email or "").strip() or None
+        # The model may pass the address as it heard it ("john dot smith at gmail
+        # dot com"); the calendar needs the address. What the caller dictated on
+        # this call comes before the address on file.
+        email = (
+            normalize_email(attendee_email)
+            or (attendee_email or "").strip()
+            or self._record.contact_email
+            or (self._brief.prospect.email or "").strip()
+            or None
+        )
         if self.capabilities.booking_requires_email and not email:
             return ToolResult.fail(
                 EMAIL_REQUIRED,
@@ -1105,6 +1218,10 @@ class SalesConversation:
             self._cost = cost
         if quality is not None:
             self._quality = quality
+        # Notes reach `call_results` and the CRM; the fields themselves stay in
+        # the record. De-duplicated, so a second `finish` adds nothing.
+        for kind, value in self._contacts_given:
+            self._record.add_note(f"{kind} given on the call: {value}")
         outcome = self.outcome()
         if self._finished:
             return outcome

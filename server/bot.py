@@ -121,7 +121,7 @@ from src.monitoring.instruments import (
     TTS_CHARACTERS,
 )
 from src.monitoring.tracing import new_trace_id, trace_from_runner_args
-from src.prompts import GREETING_INSTRUCTION, NOISE_RESUME_INSTRUCTION
+from src.prompts import GREETING_INSTRUCTION
 from src.reliability import (
     CallContext,
     CallUsage,
@@ -145,7 +145,7 @@ from src.tts_fallback import TTSFallbackSwitcher
 from src.spoken_text import SpeechObserver, SpeechTally, SpokenTextFilter
 from src.telephony import TELEPHONY_TRANSPORTS, CallSession, make_provider, stream_url
 from src.telephony.transport import create_provider_transport
-from src.turns import make_user_aggregator_params, mark_interrupted_reply
+from src.turns import BargeInGate, discard_interrupted_reply, make_user_aggregator_params
 from src.voice_quality import TurnMonitor, write_call_report
 from src.voicemail import (
     DEFAULT_VOICEMAIL_PHRASES,
@@ -178,6 +178,10 @@ def _load_config() -> Config:
 
 
 CONFIG = _load_config()
+
+# What every supported carrier streams: 8 kHz mono. See `PipelineParams` in
+# `_run_pipeline` for why a phone call's output runs at this rate.
+TELEPHONY_SAMPLE_RATE = 8000
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
@@ -308,8 +312,10 @@ async def _run_pipeline(
     # has already been spoken (`tools.TURN_RELEASING`).
     speech = SpeechTally()
     # Phase 26: only the answer reaches the voice — never the model's
-    # reasoning, tool markup or a sentence with no words in it.
-    spoken_text = SpokenTextFilter()
+    # reasoning, tool markup or a sentence with no words in it. The finished
+    # reply passes through the conversation once, which adds the read-back of a
+    # dictated number or address when the model left it out.
+    spoken_text = SpokenTextFilter(complete=conversation.complete_reply if conversation else None)
     if conversation is not None:
         conversation.speech = speech
         for schema in conversation.tools():
@@ -325,6 +331,17 @@ async def _run_pipeline(
     # retriever, because the retriever builds its search query from the last
     # user message and a guidance block appended first would become that query.
     director = ConversationDirector(conversation) if conversation else None
+
+    # Directly after the user aggregator: the turn that interrupted the agent
+    # is recognised from frames (state, not text). One with no words in it is
+    # dropped before any inference; one with words is searched on its own, not
+    # paired with the question the agent was cut off answering. `monitor` is
+    # built below; the callback runs long after it exists.
+    barge_in_gate = BargeInGate(
+        context,
+        on_barge_in_turn=retriever.search_next_turn_alone if retriever else None,
+        on_discarded_turn=lambda text: monitor.note_discarded_turn(),
+    )
 
     # The context aggregators are what give the session its memory: the user
     # aggregator appends each finished user turn and the assistant aggregator
@@ -347,6 +364,7 @@ async def _run_pipeline(
             transport.input(),
             stt,
             user_aggregator,
+            barge_in_gate,
             *([retriever] if retriever else []),
             *([director] if director else []),
             llm,
@@ -390,6 +408,22 @@ async def _run_pipeline(
             # processor is wedged — which is otherwise indistinguishable from a
             # caller who has simply stopped talking.
             enable_heartbeats=True,
+            # A heartbeat queues behind the audio that is playing, so at
+            # Pipecat's 10 s default every reply longer than ten seconds was
+            # reported as a stalled processor. Thirty still catches a real stall.
+            heartbeats_monitor_secs=30.0,
+            # A phone call's audio leaves at the carrier's own 8 kHz. At the
+            # default 24 kHz the serializer's stream resampler hands back
+            # nothing for two writes in three, and the websocket transport
+            # skips its real-time sleep on an empty write — measured
+            # 2026-09-17: a 20 s reply reached the carrier in 5.8 s (3.4x real
+            # time). The bot then believed it had stopped speaking 30% of the
+            # way through what the caller was hearing, so a barge-in after
+            # that point was not a barge-in to anything that asks
+            # (`VADBargeInStartStrategy`, `TurnMonitor`, the idle timer). At
+            # 8 kHz the TTS synthesises at the carrier's rate, nothing is
+            # resampled, and every write is paced.
+            **({"audio_out_sample_rate": TELEPHONY_SAMPLE_RATE} if call is not None else {}),
         ),
         observers=[
             diagnostics,
@@ -576,21 +610,12 @@ async def _run_pipeline(
             await voicemail.on_user_turn_stopped(content)
             if voicemail.active:
                 return
-        # Phase 12: the turn cut the bot off and carried no words — a cough, a
-        # door, an echo. Nothing else will make the agent speak again until the
-        # idle nudge, so ask it to pick up where it left off.
-        if (
-            CONFIG.voice_quality.noise_resume
-            and monitor.noise_resumes < CONFIG.voice_quality.noise_resume_max
-            and supervisor.terminated_by is None
-            and not silence.closed_call
-            and monitor.should_resume_after_noise(content)
-        ):
-            monitor.note_noise_resume()
-            logger.info(
-                event("turn.noise_resume", outcome=f"resume {monitor.noise_resumes}/{CONFIG.voice_quality.noise_resume_max}")
-            )
-            await prompt_agent(worker, context, NOISE_RESUME_INSTRUCTION)
+        # A turn that cut the bot off and carried no words — a cough, a door,
+        # an echo — starts nothing. Phase 12 asked the model to "pick up where
+        # it left off" here; heard on a call that is an agent that stops when
+        # interrupted and, two seconds later, starts talking again unprompted.
+        # An interruption ends the reply it interrupted: the agent now waits
+        # for the caller (the idle nudge is what breaks a long silence).
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message: AssistantTurnStoppedMessage):
@@ -615,9 +640,10 @@ async def _run_pipeline(
                 await worker.queue_frames([EndWorkerFrame()])
         if message.interrupted and message.content:
             # The aggregator has already written the half-finished sentence to
-            # the context. Left bare it degrades every following reply — see
-            # `mark_interrupted_reply`.
-            mark_interrupted_reply(context)
+            # the context. Left there it degrades every following reply — see
+            # `discard_interrupted_reply`. No marker text: that the reply was
+            # cut off is state (`message.interrupted`), never words in a prompt.
+            discard_interrupted_reply(context)
 
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
