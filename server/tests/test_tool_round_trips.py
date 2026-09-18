@@ -433,7 +433,7 @@ def check_wiring() -> None:
     print("\n=== wired into the bot ===")
     bot = (SERVER / "bot.py").read_text(encoding="utf-8")
     check("one tally per session", "speech = SpeechTally()" in bot)
-    check("fed by an observer watching the LLM and the spoken-text filter", "SpeechObserver(speech, llm=llm, spoken_text=spoken_text)" in bot and "spoken_text = SpokenTextFilter()" in bot)
+    check("fed by an observer watching the LLM and the spoken-text filter", "SpeechObserver(speech, llm=llm, spoken_text=spoken_text)" in bot and "spoken_text = SpokenTextFilter(" in bot)
     check("attached to the conversation", "conversation.speech = speech" in bot)
     check("with the filter still in its place in the pipeline", "            spoken_text,\n            tts," in bot)
     playbook = (SERVER / "src" / "conversation" / "playbook.py").read_text(encoding="utf-8")

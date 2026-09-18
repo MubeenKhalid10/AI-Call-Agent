@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-15 11:22 UTC",
+  "generated_at": "2026-09-18 11:34 UTC",
   "verdict": "fail",
   "requirements": [
     {
@@ -9,7 +9,7 @@
         "test_automation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -19,7 +19,7 @@
         "test_automation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -29,7 +29,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -39,7 +39,7 @@
         "test_scaling",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -49,7 +49,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -59,7 +59,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -68,7 +68,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "one real call through the configured carrier: `uv run validate.py live --to <your phone>` (no call has ever been answered on this system)"
     },
     {
@@ -77,7 +77,7 @@
         "test_conversation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "the sales eval suite against the deployed model: `uv run validate.py --evals`, then a real call"
     },
     {
@@ -86,7 +86,7 @@
         "test_voice_quality",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "the audio eval suite (`evals/suite.yaml`) and `tests/phone_drill.py barge_in` against a running bot; a real handset"
     },
     {
@@ -95,7 +95,7 @@
         "test_knowledge",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "`uv run ingest.py add <your documents>` then `evals/sales/unknown_question.yaml` against the deployed model"
     },
     {
@@ -105,7 +105,7 @@
         "test_results",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "read a real call's result: `uv run campaign.py result <attempt>`"
     },
     {
@@ -114,7 +114,7 @@
         "test_conversation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "`evals/sales/price_objection.yaml` against the deployed model"
     },
     {
@@ -125,7 +125,7 @@
         "test_scheduling",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "one real Cal.com booking on a real call (`uv run health.py calendar` first); no live booking has been observed"
     },
     {
@@ -134,7 +134,7 @@
         "test_booking_transfer",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "one real transfer to `TELEPHONY_TRANSFER_NUMBER`, then `uv run campaign.py transfers`; no live transfer has been observed"
     },
     {
@@ -144,7 +144,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "`evals/sales/callback.yaml` against the deployed model"
     },
     {
@@ -153,7 +153,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "a scheduled callback placed by `campaign.py run` at its time, on a real carrier"
     },
     {
@@ -163,7 +163,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "`tests/phone_drill.py voicemail`, then one real call to a voicemail with `TELEPHONY_MACHINE_DETECTION=async`"
     },
     {
@@ -173,7 +173,7 @@
         "test_scaling",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "one real delivery from the carrier: `uv run campaign.py webhooks` after the first real call (needs `TELEPHONY_PUBLIC_URL` and the signing key)"
     },
     {
@@ -184,7 +184,7 @@
         "test_production",
         "measure"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -193,7 +193,7 @@
         "test_crm",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "one real filing: `CRM_PROVIDER=hubspot`, `uv run health.py crm`, `uv run campaign.py crm-sync --once`, `crm-status`; no real HubSpot filing has been observed"
     },
     {
@@ -202,7 +202,7 @@
         "test_automation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "import `n8n/workflows/04-qualified-lead-notification.json` into a live n8n, activate it, `uv run automation.py --once`, `uv run campaign.py events`"
     },
     {
@@ -212,7 +212,7 @@
         "test_security",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "open `uv run dashboard.py` in a browser behind TLS and check one real call's detail page"
     },
     {
@@ -222,7 +222,7 @@
         "test_production",
         "posture"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "sign in over HTTPS behind the real proxy (`SECURITY_REQUIRE_HTTPS=true`) and confirm the `Secure` cookie and the redirect"
     },
     {
@@ -233,7 +233,7 @@
         "test_worker",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "kill one of two `campaign.py run` processes mid-call and watch the other adopt it (`campaign.py workers`)"
     },
     {
@@ -243,7 +243,7 @@
         "test_production",
         "measure"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "set `COST_*` rates and read one real call's cost on its detail page"
     },
     {
@@ -255,7 +255,7 @@
         "test_production",
         "measure"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "after the first real campaign: `uv run validate.py measure` reports zero prospects with two live attempts"
     },
     {
@@ -265,7 +265,7 @@
         "test_production",
         "posture"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -276,7 +276,7 @@
         "test_production",
         "posture"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "rotate every key that was in `server/.env` while it was tracked, if that repository was ever pushed"
     },
     {
@@ -288,7 +288,7 @@
         "test_automation",
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": null
     },
     {
@@ -296,7 +296,7 @@
       "sections": [
         "test_production"
       ],
-      "status": "verified (automated)",
+      "status": "FAILED",
       "manual": "measured on real audio only: `tests/phone_drill.py all` against a running bot and one real call (`validate.py live`); the last measured figures are in HANDOFF.md \u00a710"
     },
     {
@@ -321,8 +321,8 @@
     {
       "section": "config",
       "name": ".env defines every variable once",
-      "status": "pass",
-      "detail": ""
+      "status": "warn",
+      "detail": "defined more than once, last line wins: AUTOMATION_API_KEYS"
     },
     {
       "section": "config",
@@ -332,7 +332,7 @@
     },
     {
       "section": "config",
-      "name": "providers: deepgram_flux / groq:qwen/qwen3.8-27b / elevenlabs",
+      "name": "providers: deepgram_flux / cerebras:qwen-3.8-27b / deepgram",
       "status": "pass",
       "detail": ""
     },
@@ -411,20 +411,20 @@
     {
       "section": "health",
       "name": "database",
-      "status": "pass",
-      "detail": "25 prospect(s), 0 live attempt(s)"
+      "status": "fail",
+      "detail": "no answer within 6s"
     },
     {
       "section": "health",
       "name": "scheduler",
-      "status": "warn",
-      "detail": "1 alive, 7 STALE, 12 stopped, 0 call(s) followed; queue: 0 due now (0 queued + 0 callbacks), 0 scheduled later, 0 reserved, 0 live, 0 active campaign(s) \u2014 7 worker(s) stopped beating; a live worker adopts their calls"
+      "status": "fail",
+      "detail": "no answer within 6s"
     },
     {
       "section": "health",
       "name": "knowledge",
-      "status": "pass",
-      "detail": "2 document(s), 25 chunk(s)"
+      "status": "fail",
+      "detail": "no answer within 6s"
     },
     {
       "section": "health",
@@ -436,13 +436,13 @@
       "section": "health",
       "name": "llm",
       "status": "pass",
-      "detail": "groq:qwen/qwen3.8-27b \u2014 key accepted"
+      "detail": "cerebras:qwen-3.8-27b \u2014 key accepted"
     },
     {
       "section": "health",
       "name": "tts",
-      "status": "warn",
-      "detail": "elevenlabs:eleven_flash_v2_5 \u2014 key recognised but restricted (The API key you used is missing the permission user_read to execute this operati); only synthesis can confirm it"
+      "status": "pass",
+      "detail": "deepgram \u2014 key accepted"
     },
     {
       "section": "health",
@@ -476,8 +476,8 @@
     },
     {
       "section": "posture",
-      "name": "no DASHBOARD_SESSION_SECRET: sessions end at every restart",
-      "status": "warn",
+      "name": "sessions signed with DASHBOARD_SESSION_SECRET",
+      "status": "pass",
       "detail": ""
     },
     {
@@ -548,8 +548,8 @@
     },
     {
       "section": "posture",
-      "name": ".env defines every variable once",
-      "status": "pass",
+      "name": ".env defines AUTOMATION_API_KEYS more than once; the last line wins",
+      "status": "warn",
       "detail": ""
     },
     {
@@ -566,15 +566,15 @@
     },
     {
       "section": "measure",
-      "name": "attempts by status: {'COMPLETED': 2, 'FAILED': 29}",
+      "name": "attempts by status: {}",
       "status": "pass",
       "detail": ""
     },
     {
       "section": "measure",
-      "name": "answer rate 0.065 over 31 finished attempt(s); success rate 0.0 over 31 result(s)",
-      "status": "pass",
-      "detail": ""
+      "name": "answer rate None over 0 finished attempt(s); success rate None over 0 result(s)",
+      "status": "skip",
+      "detail": "no finished real calls yet"
     },
     {
       "section": "measure",
@@ -592,175 +592,193 @@
       "section": "test_scheduling",
       "name": "the calendar (Phase 7)",
       "status": "pass",
-      "detail": "68 passed (11.1s)"
-    },
-    {
-      "section": "test_conversation",
-      "name": "the sales conversation (Phase 6)",
-      "status": "pass",
-      "detail": "398 passed (12.2s)"
+      "detail": "68 passed (6.8s)"
     },
     {
       "section": "test_results",
       "name": "the call result (Phase 8)",
       "status": "pass",
-      "detail": "260 passed (16.6s)"
+      "detail": "260 passed (18.0s)"
+    },
+    {
+      "section": "test_client_theme",
+      "name": "the browser client in the application's design (Phase 33)",
+      "status": "pass",
+      "detail": "44 passed (20.4s)"
+    },
+    {
+      "section": "test_knowledge_index",
+      "name": "the in-memory knowledge index and the retrieval timeout (Phase 37)",
+      "status": "pass",
+      "detail": "0 passed (21.7s)"
+    },
+    {
+      "section": "test_conversation",
+      "name": "the sales conversation (Phase 6)",
+      "status": "pass",
+      "detail": "417 passed (25.9s)"
+    },
+    {
+      "section": "test_spoken_values",
+      "name": "dictated phone numbers and email addresses stored as values (Phase 40)",
+      "status": "pass",
+      "detail": "138 passed (26.9s)"
     },
     {
       "section": "test_spoken_text",
       "name": "what the caller may hear (Phase 26)",
       "status": "pass",
-      "detail": "68 passed (16.9s)"
-    },
-    {
-      "section": "test_actions",
-      "name": "the tools (Phase 7)",
-      "status": "pass",
-      "detail": "240 passed (19.2s)"
+      "detail": "113 passed (28.7s)"
     },
     {
       "section": "test_realtime",
       "name": "turn-taking wiring (Phase 2)",
       "status": "pass",
-      "detail": "19 passed (21.6s)"
+      "detail": "44 passed (28.9s)"
     },
     {
-      "section": "test_campaigns",
-      "name": "prospects, campaigns, the queue (Phase 5)",
+      "section": "test_actions",
+      "name": "the tools (Phase 7)",
       "status": "pass",
-      "detail": "248 passed (25.0s)"
+      "detail": "242 passed (30.5s)"
     },
     {
       "section": "test_reliability",
       "name": "failure injection (Phase 9)",
       "status": "pass",
-      "detail": "141 passed (25.6s)"
+      "detail": "141 passed (31.9s)"
+    },
+    {
+      "section": "test_production",
+      "name": "the end-to-end story over PostgreSQL (Phase 23)",
+      "status": "fail",
+      "detail": "exit 1: asyncpg.exceptions.InternalServerError: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15"
+    },
+    {
+      "section": "test_automation",
+      "name": "the n8n API and outbox (Phase 17)",
+      "status": "fail",
+      "detail": "exit 1: asyncpg.exceptions.InternalServerError: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15"
     },
     {
       "section": "test_performance",
       "name": "usage, cost, pooling, concurrency (Phase 11)",
       "status": "pass",
-      "detail": "59 passed (26.3s)"
-    },
-    {
-      "section": "test_worker",
-      "name": "the scheduler (Phase 13)",
-      "status": "pass",
-      "detail": "216 passed (26.8s)"
-    },
-    {
-      "section": "test_crm",
-      "name": "CRM sync (Phase 15)",
-      "status": "pass",
-      "detail": "180 passed (27.9s)"
-    },
-    {
-      "section": "test_compliance",
-      "name": "compliance controls (Phase 19)",
-      "status": "pass",
-      "detail": "147 passed (29.5s)"
+      "detail": "36 passed, skipped: database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (39.4s)"
     },
     {
       "section": "test_scaling",
       "name": "multi-worker scaling (Phase 21)",
       "status": "pass",
-      "detail": "151 passed (30.8s)"
+      "detail": "114 passed, skipped: database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (39.4s)"
     },
     {
       "section": "test_webhooks",
       "name": "carrier webhooks (Phase 14)",
       "status": "pass",
-      "detail": "192 passed (30.9s)"
+      "detail": "172 passed, skipped: database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (39.6s)"
     },
     {
-      "section": "test_tts_fallback",
-      "name": "the TTS fallback (Phase 30)",
-      "status": "pass",
-      "detail": "74 passed (36.2s)"
+      "section": "test_compliance",
+      "name": "compliance controls (Phase 19)",
+      "status": "fail",
+      "detail": "exit 1: asyncpg.exceptions.InternalServerError: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15"
     },
     {
       "section": "test_telephony",
       "name": "the carriers (Phase 4)",
       "status": "pass",
-      "detail": "143 passed (37.9s)"
-    },
-    {
-      "section": "test_dashboard",
-      "name": "the dashboard (Phases 10, 20)",
-      "status": "pass",
-      "detail": "161 passed (39.8s)"
-    },
-    {
-      "section": "test_monitoring",
-      "name": "monitoring and observability (Phase 22)",
-      "status": "pass",
-      "detail": "170 passed (40.3s)"
-    },
-    {
-      "section": "test_booking_transfer",
-      "name": "booking and transfer (Phase 16)",
-      "status": "pass",
-      "detail": "99 passed (40.6s)"
-    },
-    {
-      "section": "test_voice_quality",
-      "name": "turn monitoring, voicemail (Phase 12)",
-      "status": "pass",
-      "detail": "190 passed (41.4s)"
-    },
-    {
-      "section": "test_automation",
-      "name": "the n8n API and outbox (Phase 17)",
-      "status": "pass",
-      "detail": "245 passed (42.0s)"
-    },
-    {
-      "section": "test_latency",
-      "name": "per-turn latency instrumentation (Phase 29)",
-      "status": "pass",
-      "detail": "97 passed (42.3s)"
+      "detail": "143 passed (43.3s)"
     },
     {
       "section": "test_security",
       "name": "authentication, authorisation, hardening (Phase 18)",
       "status": "pass",
-      "detail": "214 passed (47.7s)"
-    },
-    {
-      "section": "test_knowledge",
-      "name": "retrieval (Phase 3)",
-      "status": "pass",
-      "detail": "58 passed (47.9s)"
+      "detail": "216 passed (44.0s)"
     },
     {
       "section": "test_tool_advertising",
       "name": "the prompt budget and per-stage tool advertising (Phase 31)",
       "status": "pass",
-      "detail": "112 passed (49.6s)"
+      "detail": "112 passed (45.2s)"
+    },
+    {
+      "section": "test_voice_quality",
+      "name": "turn monitoring, voicemail (Phase 12)",
+      "status": "pass",
+      "detail": "193 passed (45.5s)"
+    },
+    {
+      "section": "test_tts_fallback",
+      "name": "the TTS fallback (Phase 30)",
+      "status": "pass",
+      "detail": "78 passed (47.7s)"
+    },
+    {
+      "section": "test_booking_transfer",
+      "name": "booking and transfer (Phase 16)",
+      "status": "pass",
+      "detail": "81 passed, skipped: database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (52.4s)"
+    },
+    {
+      "section": "test_knowledge",
+      "name": "retrieval (Phase 3)",
+      "status": "pass",
+      "detail": "81 passed (53.7s)"
+    },
+    {
+      "section": "test_latency",
+      "name": "per-turn latency instrumentation (Phase 29)",
+      "status": "pass",
+      "detail": "97 passed (55.0s)"
     },
     {
       "section": "test_tool_round_trips",
       "name": "which tools need a second LLM request (Phase 32)",
       "status": "pass",
-      "detail": "54 passed (53.4s)"
-    },
-    {
-      "section": "test_production",
-      "name": "the end-to-end story over PostgreSQL (Phase 23)",
-      "status": "pass",
-      "detail": "158 passed (57.4s)"
+      "detail": "54 passed (56.5s)"
     },
     {
       "section": "test_app",
       "name": "the unified application (Phase 24)",
       "status": "pass",
-      "detail": "140 passed (85.3s)"
+      "detail": "162 passed (124.8s)"
     },
     {
       "section": "test_engine",
       "name": "the campaign execution engine (Phase 25)",
       "status": "pass",
-      "detail": "68 passed (115.5s)"
+      "detail": "63 passed (132.5s)"
+    },
+    {
+      "section": "test_monitoring",
+      "name": "monitoring and observability (Phase 22)",
+      "status": "pass",
+      "detail": "170 passed (139.8s)"
+    },
+    {
+      "section": "test_dashboard",
+      "name": "the dashboard (Phases 10, 20)",
+      "status": "pass",
+      "detail": "106 passed, skipped: aggregate checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (180.8s)"
+    },
+    {
+      "section": "test_worker",
+      "name": "the scheduler (Phase 13)",
+      "status": "pass",
+      "detail": "195 passed, skipped: database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15) (209.6s)"
+    },
+    {
+      "section": "test_crm",
+      "name": "CRM sync (Phase 15)",
+      "status": "pass",
+      "detail": "180 passed (257.4s)"
+    },
+    {
+      "section": "test_campaigns",
+      "name": "prospects, campaigns, the queue (Phase 5)",
+      "status": "pass",
+      "detail": "248 passed (710.6s)"
     }
   ],
   "scripts": {
@@ -770,15 +788,7 @@
       "passed": 68,
       "failed": [],
       "skipped": [],
-      "secs": 11.1
-    },
-    "test_conversation": {
-      "what": "the sales conversation (Phase 6)",
-      "exit": 0,
-      "passed": 398,
-      "failed": [],
-      "skipped": [],
-      "secs": 12.2
+      "secs": 6.8
     },
     "test_results": {
       "what": "the call result (Phase 8)",
@@ -786,39 +796,63 @@
       "passed": 260,
       "failed": [],
       "skipped": [],
-      "secs": 16.6
+      "secs": 18.0
+    },
+    "test_client_theme": {
+      "what": "the browser client in the application's design (Phase 33)",
+      "exit": 0,
+      "passed": 44,
+      "failed": [],
+      "skipped": [],
+      "secs": 20.4
+    },
+    "test_knowledge_index": {
+      "what": "the in-memory knowledge index and the retrieval timeout (Phase 37)",
+      "exit": 0,
+      "passed": 0,
+      "failed": [],
+      "skipped": [],
+      "secs": 21.7
+    },
+    "test_conversation": {
+      "what": "the sales conversation (Phase 6)",
+      "exit": 0,
+      "passed": 417,
+      "failed": [],
+      "skipped": [],
+      "secs": 25.9
+    },
+    "test_spoken_values": {
+      "what": "dictated phone numbers and email addresses stored as values (Phase 40)",
+      "exit": 0,
+      "passed": 138,
+      "failed": [],
+      "skipped": [],
+      "secs": 26.9
     },
     "test_spoken_text": {
       "what": "what the caller may hear (Phase 26)",
       "exit": 0,
-      "passed": 68,
+      "passed": 113,
       "failed": [],
       "skipped": [],
-      "secs": 16.9
-    },
-    "test_actions": {
-      "what": "the tools (Phase 7)",
-      "exit": 0,
-      "passed": 240,
-      "failed": [],
-      "skipped": [],
-      "secs": 19.2
+      "secs": 28.7
     },
     "test_realtime": {
       "what": "turn-taking wiring (Phase 2)",
       "exit": 0,
-      "passed": 19,
+      "passed": 44,
       "failed": [],
       "skipped": [],
-      "secs": 21.6
+      "secs": 28.9
     },
-    "test_campaigns": {
-      "what": "prospects, campaigns, the queue (Phase 5)",
+    "test_actions": {
+      "what": "the tools (Phase 7)",
       "exit": 0,
-      "passed": 248,
+      "passed": 242,
       "failed": [],
       "skipped": [],
-      "secs": 25.0
+      "secs": 30.5
     },
     "test_reliability": {
       "what": "failure injection (Phase 9)",
@@ -826,63 +860,61 @@
       "passed": 141,
       "failed": [],
       "skipped": [],
-      "secs": 25.6
+      "secs": 31.9
+    },
+    "test_production": {
+      "what": "the end-to-end story over PostgreSQL (Phase 23)",
+      "exit": 1,
+      "passed": 0,
+      "failed": [],
+      "skipped": [],
+      "secs": 35.1
+    },
+    "test_automation": {
+      "what": "the n8n API and outbox (Phase 17)",
+      "exit": 1,
+      "passed": 199,
+      "failed": [],
+      "skipped": [],
+      "secs": 38.9
     },
     "test_performance": {
       "what": "usage, cost, pooling, concurrency (Phase 11)",
       "exit": 0,
-      "passed": 59,
+      "passed": 36,
       "failed": [],
-      "skipped": [],
-      "secs": 26.3
-    },
-    "test_worker": {
-      "what": "the scheduler (Phase 13)",
-      "exit": 0,
-      "passed": 216,
-      "failed": [],
-      "skipped": [],
-      "secs": 26.8
-    },
-    "test_crm": {
-      "what": "CRM sync (Phase 15)",
-      "exit": 0,
-      "passed": 180,
-      "failed": [],
-      "skipped": [],
-      "secs": 27.9
-    },
-    "test_compliance": {
-      "what": "compliance controls (Phase 19)",
-      "exit": 0,
-      "passed": 147,
-      "failed": [],
-      "skipped": [],
-      "secs": 29.5
+      "skipped": [
+        "database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 39.4
     },
     "test_scaling": {
       "what": "multi-worker scaling (Phase 21)",
       "exit": 0,
-      "passed": 151,
+      "passed": 114,
       "failed": [],
-      "skipped": [],
-      "secs": 30.8
+      "skipped": [
+        "database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 39.4
     },
     "test_webhooks": {
       "what": "carrier webhooks (Phase 14)",
       "exit": 0,
-      "passed": 192,
+      "passed": 172,
       "failed": [],
-      "skipped": [],
-      "secs": 30.9
+      "skipped": [
+        "database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 39.6
     },
-    "test_tts_fallback": {
-      "what": "the TTS fallback (Phase 30)",
-      "exit": 0,
-      "passed": 74,
+    "test_compliance": {
+      "what": "compliance controls (Phase 19)",
+      "exit": 1,
+      "passed": 131,
       "failed": [],
       "skipped": [],
-      "secs": 36.2
+      "secs": 40.0
     },
     "test_telephony": {
       "what": "the carriers (Phase 4)",
@@ -890,71 +922,15 @@
       "passed": 143,
       "failed": [],
       "skipped": [],
-      "secs": 37.9
-    },
-    "test_dashboard": {
-      "what": "the dashboard (Phases 10, 20)",
-      "exit": 0,
-      "passed": 161,
-      "failed": [],
-      "skipped": [],
-      "secs": 39.8
-    },
-    "test_monitoring": {
-      "what": "monitoring and observability (Phase 22)",
-      "exit": 0,
-      "passed": 170,
-      "failed": [],
-      "skipped": [],
-      "secs": 40.3
-    },
-    "test_booking_transfer": {
-      "what": "booking and transfer (Phase 16)",
-      "exit": 0,
-      "passed": 99,
-      "failed": [],
-      "skipped": [],
-      "secs": 40.6
-    },
-    "test_voice_quality": {
-      "what": "turn monitoring, voicemail (Phase 12)",
-      "exit": 0,
-      "passed": 190,
-      "failed": [],
-      "skipped": [],
-      "secs": 41.4
-    },
-    "test_automation": {
-      "what": "the n8n API and outbox (Phase 17)",
-      "exit": 0,
-      "passed": 245,
-      "failed": [],
-      "skipped": [],
-      "secs": 42.0
-    },
-    "test_latency": {
-      "what": "per-turn latency instrumentation (Phase 29)",
-      "exit": 0,
-      "passed": 97,
-      "failed": [],
-      "skipped": [],
-      "secs": 42.3
+      "secs": 43.3
     },
     "test_security": {
       "what": "authentication, authorisation, hardening (Phase 18)",
       "exit": 0,
-      "passed": 214,
+      "passed": 216,
       "failed": [],
       "skipped": [],
-      "secs": 47.7
-    },
-    "test_knowledge": {
-      "what": "retrieval (Phase 3)",
-      "exit": 0,
-      "passed": 58,
-      "failed": [],
-      "skipped": [],
-      "secs": 47.9
+      "secs": 44.0
     },
     "test_tool_advertising": {
       "what": "the prompt budget and per-stage tool advertising (Phase 31)",
@@ -962,7 +938,49 @@
       "passed": 112,
       "failed": [],
       "skipped": [],
-      "secs": 49.6
+      "secs": 45.2
+    },
+    "test_voice_quality": {
+      "what": "turn monitoring, voicemail (Phase 12)",
+      "exit": 0,
+      "passed": 193,
+      "failed": [],
+      "skipped": [],
+      "secs": 45.5
+    },
+    "test_tts_fallback": {
+      "what": "the TTS fallback (Phase 30)",
+      "exit": 0,
+      "passed": 78,
+      "failed": [],
+      "skipped": [],
+      "secs": 47.7
+    },
+    "test_booking_transfer": {
+      "what": "booking and transfer (Phase 16)",
+      "exit": 0,
+      "passed": 81,
+      "failed": [],
+      "skipped": [
+        "database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 52.4
+    },
+    "test_knowledge": {
+      "what": "retrieval (Phase 3)",
+      "exit": 0,
+      "passed": 81,
+      "failed": [],
+      "skipped": [],
+      "secs": 53.7
+    },
+    "test_latency": {
+      "what": "per-turn latency instrumentation (Phase 29)",
+      "exit": 0,
+      "passed": 97,
+      "failed": [],
+      "skipped": [],
+      "secs": 55.0
     },
     "test_tool_round_trips": {
       "what": "which tools need a second LLM request (Phase 32)",
@@ -970,46 +988,76 @@
       "passed": 54,
       "failed": [],
       "skipped": [],
-      "secs": 53.4
-    },
-    "test_production": {
-      "what": "the end-to-end story over PostgreSQL (Phase 23)",
-      "exit": 0,
-      "passed": 158,
-      "failed": [],
-      "skipped": [],
-      "secs": 57.4
+      "secs": 56.5
     },
     "test_app": {
       "what": "the unified application (Phase 24)",
       "exit": 0,
-      "passed": 140,
+      "passed": 162,
       "failed": [],
       "skipped": [],
-      "secs": 85.3
+      "secs": 124.8
     },
     "test_engine": {
       "what": "the campaign execution engine (Phase 25)",
       "exit": 0,
-      "passed": 68,
+      "passed": 63,
       "failed": [],
       "skipped": [],
-      "secs": 115.5
+      "secs": 132.5
+    },
+    "test_monitoring": {
+      "what": "monitoring and observability (Phase 22)",
+      "exit": 0,
+      "passed": 170,
+      "failed": [],
+      "skipped": [],
+      "secs": 139.8
+    },
+    "test_dashboard": {
+      "what": "the dashboard (Phases 10, 20)",
+      "exit": 0,
+      "passed": 106,
+      "failed": [],
+      "skipped": [
+        "aggregate checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 180.8
+    },
+    "test_worker": {
+      "what": "the scheduler (Phase 13)",
+      "exit": 0,
+      "passed": 195,
+      "failed": [],
+      "skipped": [
+        "database checks (cannot reach PostgreSQL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15)"
+      ],
+      "secs": 209.6
+    },
+    "test_crm": {
+      "what": "CRM sync (Phase 15)",
+      "exit": 0,
+      "passed": 180,
+      "failed": [],
+      "skipped": [],
+      "secs": 257.4
+    },
+    "test_campaigns": {
+      "what": "prospects, campaigns, the queue (Phase 5)",
+      "exit": 0,
+      "passed": 248,
+      "failed": [],
+      "skipped": [],
+      "secs": 710.6
     }
   },
   "measures": {
-    "attempts_by_status": {
-      "COMPLETED": 2,
-      "FAILED": 29
-    },
-    "finished": 31,
-    "reached": 2,
-    "answer_rate": 0.065,
-    "results_by_disposition": {
-      "FAILED": 29,
-      "COMPLETED": 2
-    },
-    "success_rate": 0.0,
+    "attempts_by_status": {},
+    "finished": 0,
+    "reached": 0,
+    "answer_rate": null,
+    "results_by_disposition": {},
+    "success_rate": null,
     "latency": {
       "calls_with_figures": 0,
       "p50_ms": null,
@@ -1024,7 +1072,7 @@
       "repeated_idempotency_keys": 0
     },
     "fleet": {
-      "workers": "1 alive, 7 STALE, 12 stopped, 0 call(s) followed",
+      "workers": "1 alive, 2 STALE, 2 stopped, 0 call(s) followed",
       "queue": "0 due now (0 queued + 0 callbacks), 0 scheduled later, 0 reserved, 0 live, 0 active campaign(s)"
     },
     "throughput": {
