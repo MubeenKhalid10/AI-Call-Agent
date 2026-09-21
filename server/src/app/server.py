@@ -380,7 +380,7 @@ def create_unified_app(
     # bot is behind the application (Phase 34), the bot's otherwise.
     page_headers = {
         "Cache-Control": "no-store",
-        "Permissions-Policy": f"camera=(), microphone=({'self' if proxy_bot else chr(34) + bot_url.rstrip('/') + chr(34)}), geolocation=()",
+        "Permissions-Policy": f"camera=(), microphone=(self {'*' if proxy_bot else chr(34) + bot_url.rstrip('/') + chr(34)}), geolocation=()",
     }
 
     @app.get("/", include_in_schema=False)
