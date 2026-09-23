@@ -523,8 +523,8 @@ async def check_campaign_context() -> None:
         )
         check(
             f"{label}: unknown detail is not invented, in natural words",
-            "do not invent it: say naturally you are not certain and offer to have the"
-            " team confirm or follow up." in instruction,
+            "do not invent it: answer with the closest thing you do know, as an expert"
+            " would, and say positively that the team will confirm the exact detail" in instruction,
         )
         check(
             f"{label}: off-topic gets a natural answer and a steer back, not a disclaimer",
@@ -595,9 +595,9 @@ async def check_campaign_context() -> None:
     from src.prompts import KNOWLEDGE_BLOCK_FOOTER, KNOWLEDGE_NONE_BLOCK
 
     check("a missed retrieval points the model at the facts in its instructions", "answer it from the facts in your instructions if they cover it" in KNOWLEDGE_NONE_BLOCK)
-    check("and still forbids guessing beyond them", "do not guess" in KNOWLEDGE_NONE_BLOCK)
+    check("and still forbids guessing beyond them", "Never guess or invent a number" in KNOWLEDGE_NONE_BLOCK and "never tell me you don't know" in KNOWLEDGE_NONE_BLOCK)
     check("a hit lets the facts and the excerpts be used together", "the excerpts above and the facts already in your instructions" in KNOWLEDGE_BLOCK_FOOTER)
-    check("and the refusal wording for detail neither holds is natural, not a canned disclaimer", "say naturally that you are not certain of that one and offer to have somebody confirm it" in KNOWLEDGE_BLOCK_FOOTER and "do not guess and do not answer it from your own general knowledge" in KNOWLEDGE_BLOCK_FOOTER)
+    check("and detail neither holds gets an expert answer plus a confirmation, never a disclaimer", "a specialist will confirm the exact figure" in KNOWLEDGE_BLOCK_FOOTER and "never tell me you don't know" in KNOWLEDGE_BLOCK_FOOTER and "Never invent a number" in KNOWLEDGE_BLOCK_FOOTER)
 
 
 async def check_system_instruction() -> None:
@@ -686,8 +686,8 @@ async def check_natural_conversation() -> None:
     check("the AI identity is disclosed only when asked, not repeated", "Do not raise it unprompted and do not repeat it." in instruction)
     check("general talk is answered naturally, not with a canned disclaimer", 'Never meet chat with "I don\'t have that information"' in instruction)
     check("a company fact still comes only from the campaign facts and the block", "Those are your only sources of facts about this business" in instruction)
-    check("an unknown company fact gets natural uncertainty and a follow-up", "you do not have that in front of you and offer to have the team confirm it" in instruction)
-    check("and never a fabricated one", "never guess a number" in instruction and "turn a fact about another company into one about this one" in instruction)
+    check("an unknown company fact gets an expert answer and a confirmation, never a disclaimer", "a specialist will confirm the exact detail" in instruction and "Never say \"I don't know\"" in instruction)
+    check("and never a fabricated one", "Never guess a number" in instruction and "turn a fact about another company into one about this one" in instruction)
     check("the opening line is a short natural greeting, not a scripted intro", "Open with a short, natural greeting and let them respond" in instruction)
     greeting_block = stage_block(ConversationState.GREETING, QualificationRecord())
     check("the greeting stage eases in one step at a time", "Ease in one step at a time" in greeting_block and "ask whether they have a minute" in greeting_block and "do not announce you are an AI" in greeting_block)
@@ -704,7 +704,7 @@ async def check_natural_conversation() -> None:
     )
     check(
         "but a missed retrieval on a real company fact still refuses to guess",
-        "do not guess and do not answer from your own general knowledge" in KNOWLEDGE_NONE_BLOCK,
+        "Never guess or invent a number" in KNOWLEDGE_NONE_BLOCK and "never tell me you don't know" in KNOWLEDGE_NONE_BLOCK,
     )
 
     # Phase 33 (2026-09-15): an explicit "end the call" is honoured — the guidance
@@ -1239,14 +1239,14 @@ async def scenario_unknown_product_question() -> None:
     check("the call state is unaffected by a question", call.state is ConversationState.GREETING)
     instruction = call.conversation.system_instruction()
     # Phase 28: the block and the campaign facts, and nothing else.
-    check("the agent is told to answer from the block and the campaign facts only", "Answer from those and nothing else" in instruction and "your only sources of facts about this business" in instruction)
-    check("and to say plainly when it does not have it", "do not have that in front of you" in instruction)
-    check("and never to guess a number or a policy", "never guess a number" in instruction)
+    check("the agent is told to answer from the block and the campaign facts first", "Answer from those first" in instruction and "your only sources of facts about this business" in instruction)
+    check("and never to say it does not have it", "Never say \"I don't know\"" in instruction and "not in front of you" in instruction)
+    check("and never to guess a number or a policy", "Never guess a number" in instruction)
 
     without = SalesConversation(brief_for(), knowledge_base=False).system_instruction()
     check(
         "with no knowledge base it offers to have it confirmed",
-        "have a specialist confirm it" in without,
+        "a specialist will confirm the exact detail" in without,
     )
 
 

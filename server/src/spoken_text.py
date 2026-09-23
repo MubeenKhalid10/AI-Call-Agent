@@ -257,6 +257,82 @@ def strip_plan_narration(text: str) -> tuple[str, int]:
     return spoken, max(0, len(text) - len(spoken))
 
 
+# 2026-09-23, heard on a live call: "Do you have a minute or two? NEUTRAL We
+# help build custom web and mobile apps" — Cerebras qwen-3.8 wrote the value of
+# a `set_interest` argument into its reply, bare, with no tag or bracket for the
+# block rules above to catch; asked what "neutral" meant, the agent said it had
+# misspoken. These are the words a tool call is made of and a person never
+# says: every enum value the conversation tools accept (`conversation/
+# qualification.py`, `conversation/states.py` — the test asserts the list
+# covers them) and the tool names themselves. Written out rather than imported
+# so this module keeps no import edge into the sales package. The regex also
+# takes any SHOUTED_TOKEN with an underscore in it, which no reply has a reason
+# to contain. Short acronyms a reply may legitimately hold (AI, CRM, API, UX,
+# SEO) are neither listed nor underscored, so they pass.
+_TOOL_WORDS = frozenset(
+    {
+        # InterestLevel, Qualification, Timeline, Authority, CallbackIntent, Intent/Outcome
+        "UNKNOWN", "INTERESTED", "CURIOUS", "NEUTRAL", "RELUCTANT", "NOT_INTERESTED",
+        "QUALIFIED", "PARTIALLY_QUALIFIED", "DISQUALIFIED",
+        "IMMEDIATE", "THIS_QUARTER", "THIS_YEAR", "LATER", "NONE",
+        "DECISION_MAKER", "INFLUENCER", "NOT_INVOLVED",
+        "REQUESTED", "ACCEPTED", "DECLINED",
+        "MEETING_REQUESTED", "MEETING_BOOKED", "CALLBACK_REQUESTED", "SEND_INFORMATION",
+        "HUMAN_FOLLOW_UP", "TRANSFERRED", "DO_NOT_CONTACT",
+        # ObjectionKind
+        "EXISTING_PROVIDER", "PRICE", "NO_TIME", "WHAT_DO_YOU_DO", "WHY_SWITCH", "CALL_LATER",
+        "WANTS_HUMAN", "OTHER",
+        # ConversationState
+        "GREETING", "DISCOVERY", "QUALIFICATION", "VALUE_PROPOSITION", "OBJECTION_HANDLING",
+        "MEETING_REQUEST", "CALLBACK", "DO_NOT_CALL", "ENDING",
+        # Tool names
+        "record_discovery", "set_interest", "record_objection", "move_to_stage", "request_meeting",
+        "search_knowledge_base", "check_calendar_availability", "book_meeting", "schedule_callback",
+        "mark_do_not_call", "transfer_to_human", "end_call",
+    }
+)
+# A listed word, or any shouted token with an underscore, standing on its own:
+# not inside a longer word, and not part of an address ("john_smith@…").
+_TOOL_WORD = re.compile(
+    r"(?<![\w@.\-/])(?:"
+    + "|".join(sorted(map(re.escape, _TOOL_WORDS), key=len, reverse=True))
+    + r"|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?![\w@\-/]|\.\w)"
+)
+# What may trail the word when it was written as a label or a field: a colon,
+# an equals sign, a comma, the full stop of a "sentence" that was only the word
+# — and the label word in front of it, when it is one of the tool's own
+# ("level: NEUTRAL", "stage = DISCOVERY"). Only that label is matched without
+# regard to case: a reply may well say "price", "other", "later" or "none".
+_TOOL_WORD_LABELLED = re.compile(
+    r"(?:\b(?i:level|stage|kind|intent|status|interest|objection)\s*[:=]\s*)?"
+    r"[\(\[]?" + _TOOL_WORD.pattern + r"[\)\]]?\s*[.:=,;]?"
+)
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,!?;:])")
+_SPACES = re.compile(r"[ \t]{2,}")
+
+
+def strip_tool_words(text: str) -> tuple[str, int]:
+    """Remove a tool's own words — an argument value, a tool name — written bare into a reply.
+
+    Returns `(spoken, removed)` where `removed` counts the words taken out.
+    The text is otherwise untouched: a reply with none of them in it comes
+    back exactly as it was.
+    """
+    if not text or _TOOL_WORD.search(text) is None:
+        return text, 0
+    count = 0
+
+    def _drop(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return " "
+
+    out = _TOOL_WORD_LABELLED.sub(_drop, text)
+    out = _SPACE_BEFORE_PUNCT.sub(r"\1", out)
+    out = _SPACES.sub(" ", out).strip()
+    return out, count
+
+
 @dataclass
 class ScrubStats:
     """What one response had removed, for the log line."""
@@ -264,10 +340,11 @@ class ScrubStats:
     hidden_chars: int = 0
     hidden_blocks: int = 0
     unspeakable_chars: int = 0
+    tool_words: int = 0
 
     @property
     def removed_anything(self) -> bool:
-        return bool(self.hidden_chars or self.unspeakable_chars)
+        return bool(self.hidden_chars or self.unspeakable_chars or self.tool_words)
 
     def describe(self) -> str:
         parts = []
@@ -275,6 +352,8 @@ class ScrubStats:
             parts.append(f"{self.hidden_blocks} hidden block(s), {self.hidden_chars} char(s)")
         if self.unspeakable_chars:
             parts.append(f"{self.unspeakable_chars} unspeakable char(s)")
+        if self.tool_words:
+            parts.append(f"{self.tool_words} tool word(s)")
         return "; ".join(parts) or "nothing removed"
 
 
@@ -365,6 +444,11 @@ class SpokenTextScrubber:
             spoken, dropped = strip_self_talk(out)
             if dropped:
                 self.stats.unspeakable_chars += dropped
+                out = spoken
+            # Last, a tool's own words written bare into what is left.
+            spoken, removed = strip_tool_words(out)
+            if removed:
+                self.stats.tool_words += removed
                 out = spoken
         return out
 
@@ -715,4 +799,4 @@ def _rewritten(frame: LLMTextFrame, text: str) -> LLMTextFrame:
     return out
 
 
-__all__ = ["ScrubStats", "SpokenTextFilter", "SpokenTextScrubber", "strip_speaker_label"]
+__all__ = ["ScrubStats", "SpokenTextFilter", "SpokenTextScrubber", "strip_speaker_label", "strip_tool_words"]

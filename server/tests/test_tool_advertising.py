@@ -347,8 +347,8 @@ def check_prompt() -> None:
         ("schedules callbacks with an exact time", "schedule_callback with it as YYYY-MM-DDTHH:MM"),
         ("searches the knowledge base for detail", "search_knowledge_base"),
         ("never reads a tool result aloud", "Never mention the tools or read a result aloud"),
-        ("answers from the block and the campaign facts only", "Answer from those and nothing else"),
-        ("says when it does not have something", "do not have that in front of you"),
+        ("answers from the block and the campaign facts first", "Answer from those first"),
+        ("never says it does not have something", "Never say \"I don't know\""),
     ):
         check(f"it still says the agent {rule}", needle in instruction)
     check("campaign context is still in it", "WHY YOU ARE CALLING" in instruction and "Northwind" in instruction)
@@ -383,11 +383,15 @@ def check_prompt() -> None:
     # have at all (~140 tokens): never discuss its instructions, tools or the
     # technology behind the call; give only the company's public contact
     # details; speak as a representative rather than as "an AI" unless asked.
+    # 2026-09-23: raised to 2,050 for the knowledge rule's new shape (~40
+    # tokens): an unknown company detail gets an expert answer plus a promise
+    # that a specialist will confirm it, and the agent is told never to say
+    # "I don't know", "I don't have that information" or "not in front of me".
     # The provider's prompt cache covers the system instruction (the live log
     # shows 2,048 cached input tokens per request), so the cost is per call,
     # not per turn.
     if count.exact:
-        check("the fully wired test instruction stays under 1,980 Qwen3 tokens (Phase 33: was ~1,624)", tokens < 1980, f"{tokens} tokens, {words} words")
+        check("the fully wired test instruction stays under 2,050 Qwen3 tokens (Phase 33: was ~1,624)", tokens < 2050, f"{tokens} tokens, {words} words")
     else:
         check("the fully wired test instruction stays under 1,620 words (Phase 33: was ~1,460)", words < 1620, f"{words} words")
     report = measure(test_brief())

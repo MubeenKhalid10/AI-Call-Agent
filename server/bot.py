@@ -82,6 +82,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     UserTurnStoppedMessage,
 )
+from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
@@ -141,10 +142,10 @@ from src.reliability.observability import current_trace_id
 from src.resilience import ConnectionGuard, PeerWatchdog, SilenceHandler, prompt_agent
 from src.retrieval import KnowledgeRetriever
 from src.services import make_llm, make_stt, make_tts, warm_up_llm_module
-from src.tts_fallback import TTSFallbackSwitcher
 from src.spoken_text import SpeechObserver, SpeechTally, SpokenTextFilter
 from src.telephony import TELEPHONY_TRANSPORTS, CallSession, make_provider, stream_url
 from src.telephony.transport import create_provider_transport
+from src.tts_fallback import TTSFallbackSwitcher
 from src.turns import BargeInGate, discard_interrupted_reply, make_user_aggregator_params
 from src.voice_quality import TurnMonitor, write_call_report
 from src.voicemail import (
@@ -425,6 +426,16 @@ async def _run_pipeline(
             # resampled, and every write is paced.
             **({"audio_out_sample_rate": TELEPHONY_SAMPLE_RATE} if call is not None else {}),
         ),
+        # 2026-09-23. The browser client and the eval harness build the bot's
+        # transcript from RTVI `bot-llm-text`, which the observer takes from
+        # the LLM's own text frames — upstream of `spoken_text`, so a tool call
+        # the model wrote as prose (`<commit> set_interest> {…} </commit>`,
+        # seen live on Cerebras qwen-3.8) reached the screen even though the
+        # voice never said it. Ignoring the LLM as a source means the observer
+        # first meets each frame when the filter pushes it: unchanged frames
+        # keep their id and are reported once, rewritten ones carry only the
+        # speakable words, and dropped ones are never reported at all.
+        rtvi_observer_params=RTVIObserverParams(ignored_sources=[llm]),
         observers=[
             diagnostics,
             reporter.observer,

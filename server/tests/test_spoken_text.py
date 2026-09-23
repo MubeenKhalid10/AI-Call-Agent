@@ -16,6 +16,8 @@ regressions this script exists to keep out:
   service pushes, with a stub downstream that records what the TTS would get.
 * `services.reasoning_extra` — the provider-side half: a Groq reasoning model
   is asked for the answer only, and nothing else is.
+* the RTVI transcript (2026-09-23) — the client's `bot-llm-text` is built from
+  the filter's output, not the LLM's raw frames.
 
 Deterministic; no keys, no network, no database. Exit status is 0 when every
 check passes.
@@ -182,6 +184,51 @@ def check_scrubber() -> None:
         "Sure, let me be brief: we build custom web and mobile software.",
     ):
         check(f"left alone: {text[:58]!r}", stream(text, 4) == text, repr(stream(text, 4)))
+
+    print("\n=== a tool's own words, written bare (2026-09-23) ===")
+    # Heard on a live call: the value of a set_interest argument, spoken.
+    bare = "Great. I'm Alex at Hashmaker Solutions. Do you have a minute or two? NEUTRAL We help build custom web and mobile apps."
+    for size in (1, 5, 200):
+        check(
+            f"a bare argument value is not spoken ({size} chars at a time)",
+            stream(bare, size) == "Great. I'm Alex at Hashmaker Solutions. Do you have a minute or two? We help build custom web and mobile apps.",
+            repr(stream(bare, size)),
+        )
+    labelled = "Do you have a minute? level: NEUTRAL. We build apps."
+    check("nor a labelled one", stream(labelled) == "Do you have a minute? We build apps.", repr(stream(labelled)))
+    named = "set_interest NOT_INTERESTED Understood, I won't keep you."
+    check("nor a tool name and an underscored value", stream(named) == "Understood, I won't keep you.", repr(stream(named)))
+    check("an unlisted shouted token with an underscore goes too", stream("Sure. SOME_NEW_VALUE Does Tuesday work?") == "Sure. Does Tuesday work?")
+    for plain in (
+        "We work with AI, CRM and API integrations, and UX design.",
+        "Send it to john_smith@example.com and I'll follow up.",
+        "The price is neutral on volume; other options exist later.",
+        "It's the PRICE-first plan.",
+    ):
+        check(f"ordinary speech is untouched: {plain[:40]!r}", stream(plain) == plain, repr(stream(plain)))
+    scrubber = SpokenTextScrubber()
+    scrubber.feed(bare)
+    scrubber.finish()
+    check("and the log line counts it", "1 tool word(s)" in scrubber.stats.describe(), scrubber.stats.describe())
+    mixed = "NEUTRAL The price is neutral on volume; other options exist later."
+    check("lower-case ordinary words survive next to a real tool word", stream(mixed) == "The price is neutral on volume; other options exist later.", repr(stream(mixed)))
+
+    import enum as _enum
+
+    from src.conversation import qualification as _qualification
+    from src.conversation import states as _states
+    from src.conversation.tools import TOOL_NAMES
+    from src.spoken_text import _TOOL_WORDS
+
+    enums = [
+        obj
+        for module in (_qualification, _states)
+        for obj in vars(module).values()
+        if isinstance(obj, type) and issubclass(obj, _enum.Enum) and obj.__module__ == module.__name__
+    ]
+    check("the enums were found", len(enums) >= 5, str([e.__name__ for e in enums]))
+    vocabulary = {member.value for enum in enums for member in enum} | set(TOOL_NAMES)
+    check("the list covers every tool value and name the conversation uses", vocabulary <= _TOOL_WORDS, f"missing: {sorted(vocabulary - _TOOL_WORDS)}")
 
     print("\n=== nothing to say ===")
     check("a lone full stop is never sent", stream(".") == "")
@@ -367,11 +414,76 @@ def check_retry_visibility() -> None:
     finally:
         logger.remove(handle)
 
+async def check_transcript() -> None:
+    """The client's transcript sees the scrubbed reply, not the model's raw text (2026-09-23).
+
+    The browser client and the eval harness build the bot's side of the
+    transcript from RTVI `bot-llm-text`, which the observer takes from every
+    `LLMTextFrame` push it sees — the LLM's own push first, upstream of the
+    filter. Seen live on Cerebras qwen-3.8: the voice never said
+    `<commit> set_interest> {…} </commit>`, the screen showed it. `bot.py`
+    lists the LLM among the observer's ignored sources, so it first meets
+    each frame when the filter pushes it. This drives the pipecat observer
+    itself, with and without that setting, over the same reply.
+    """
+    print("\n=== the transcript the client sees (2026-09-23) ===")
+    from pipecat.frames.frames import TextFrame
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.processors.frame_processor import FrameProcessor
+    from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIObserverParams
+    from pipecat.tests.utils import run_test
+
+    leak = (
+        "I'm Alex, calling on behalf of Hashmaker Solutions. Do you have a couple minutes? "
+        '<commit> set_interest> {"target": "person", "body": {"level": "NEUTRAL"}} </commit>'
+    )
+
+    class FakeLLM(FrameProcessor):
+        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+            await super().process_frame(frame, direction)
+            if isinstance(frame, TextFrame) and frame.text == "go":
+                await self.push_frame(LLMFullResponseStartFrame())
+                for i in range(0, len(leak), 9):
+                    await self.push_frame(LLMTextFrame(text=leak[i : i + 9]))
+                await self.push_frame(LLMFullResponseEndFrame())
+                return
+            await self.push_frame(frame, direction)
+
+    class Capture(RTVIObserver):
+        def __init__(self, **kwargs):
+            super().__init__(None, **kwargs)
+            self.messages = []
+
+        async def send_rtvi_message(self, model, exclude_none=True):
+            self.messages.append(model)
+
+    async def transcript(ignore_llm: bool) -> str:
+        llm = FakeLLM()
+        observer = Capture(params=RTVIObserverParams(ignored_sources=[llm] if ignore_llm else []))
+        await run_test(
+            Pipeline([llm, SpokenTextFilter()]),
+            frames_to_send=[TextFrame(text="go")],
+            observers=[observer],
+        )
+        return "".join(m.data.text for m in observer.messages if getattr(m, "type", "") == "bot-llm-text")
+
+    raw = await transcript(ignore_llm=False)
+    check("without the setting the observer reports the raw model text", "<commit>" in raw, raw[:120])
+    shown = await transcript(ignore_llm=True)
+    check("with the LLM ignored the transcript carries no markup", "<commit>" not in shown and "set_interest" not in shown, shown)
+    check("and the spoken words, once", shown == "I'm Alex, calling on behalf of Hashmaker Solutions. Do you have a couple minutes?", shown)
+
+    import re
+
+    bot = (SERVER / "bot.py").read_text(encoding="utf-8")
+    check("bot.py lists the LLM among the observer's ignored sources", re.search(r"RTVIObserverParams\(ignored_sources=\[llm\]\)", bot) is not None)
+
 
 async def main() -> int:
     print("Spoken-text checks — reasoning, tool markup and wordless sentences never reach the voice.")
     check_scrubber()
     await check_stage()
+    await check_transcript()
     check_provider_side()
     check_retry_visibility()
     print()

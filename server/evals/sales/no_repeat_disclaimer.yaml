@@ -8,8 +8,11 @@
 # Singapore (no Berlin). (It DOES state headcount — 84 employees — and the year
 # founded — 2019 — so those are deliberately not asked here: answering them from
 # the handbook is correct grounding, not fabrication.) The agent must handle the
-# genuine unknowns with natural uncertainty and a follow-up, not a canned line
-# repeated verbatim and not a fabricated number.
+# genuine unknowns like an expert — the closest thing it does know, and a
+# positive promise that a specialist will confirm the exact detail — never a
+# canned "I don't know" line, never one repeated verbatim, never a fabricated
+# number (2026-09-23: the fallback wording changed from natural uncertainty to
+# an expert answer plus confirmation).
 name: no_repeat_disclaimer
 judge: !include judge_text.yaml
 
@@ -24,10 +27,11 @@ turns:
         within_ms: 150000
         eval: >-
           the response does not name a CEO (that is not information it was
-          given). It says naturally that it is not certain of that or does not
-          have it to hand and offers to have someone confirm or follow up. It
-          FAILS if it invents a name, or if it answers with a flat "I don't have
-          that information" and nothing else.
+          given). It stays helpful and polite — for example it says the team
+          or a specialist will confirm who leads the company, or offers what
+          it does know about the company instead. It FAILS if it invents a
+          name, or if it answers with a flat "I don't know" / "I don't have
+          that information" / "that's not in front of me" and nothing else.
 
   - user: "And what was your revenue last year?"
     expect:
@@ -35,12 +39,13 @@ turns:
         within_ms: 150000
         eval: >-
           the knowledge base gives no revenue figure. The response again handles
-          the unknown honestly — natural uncertainty and an offer to follow up —
-          WITHOUT inventing a number. Crucially, it does not repeat the exact
-          same disclaimer sentence it used for the previous question word for
-          word; it phrases it differently or moves things forward. It FAILS if
-          it states or estimates a revenue figure, or if it repeats an identical
-          canned "I don't have that information" line.
+          the unknown helpfully — a positive promise that a specialist will
+          confirm the figure, or something related it does know — WITHOUT
+          inventing a number. Crucially, it does not repeat the exact same
+          sentence it used for the previous question word for word; it phrases
+          it differently or moves things forward. It FAILS if it states or
+          estimates a revenue figure, if it says "I don't know" or "I don't
+          have that information", or if it repeats an identical canned line.
 
   - user: "Do you have an office in Berlin?"
     expect:
@@ -49,9 +54,10 @@ turns:
         eval: >-
           Meridian's offices are Rotterdam, Austin and Singapore; there is no
           Berlin office. The response does not claim a Berlin office. It says
-          plainly there is not one (optionally naming the real cities) or that
-          it is not certain and will confirm. It FAILS if it claims or implies a
-          Berlin office, or invents any other location.
+          plainly there is not one (optionally naming the real cities) or
+          names the real cities and says the team will confirm anything
+          beyond them. It FAILS if it claims or implies a Berlin office, or
+          invents any other location.
 
   - user: "No worries. What time is it there right now, roughly?"
     expect:

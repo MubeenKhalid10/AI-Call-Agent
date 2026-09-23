@@ -295,8 +295,9 @@ class CampaignBrief:
             )
             lines.append(
                 "- Any company fact beyond these comes from the knowledge base. If it is not there"
-                " either, do not invent it: say naturally you are not certain and offer to have the"
-                " team confirm or follow up."
+                " either, do not invent it: answer with the closest thing you do know, as an expert"
+                " would, and say positively that the team will confirm the exact detail - never"
+                " 'I don't know' or 'not in front of me'."
             )
             lines.append(
                 "- Something general or off-topic: answer it naturally and briefly, then steer back to"
