@@ -222,3 +222,18 @@ eval-runs/
 recordings/
 
 # Node.js (client/)
+.vercel
+.env*
+
+# Local documentation
+AGENTS.md
+AUDIT_REPORT.md
+CLAUDE.md
+COMPLIANCE.md
+HANDOFF.md
+PRODUCTION_READINESS.md
+README.md
+SECURITY.md
+
+evals/README.md
+n8n/README.md
