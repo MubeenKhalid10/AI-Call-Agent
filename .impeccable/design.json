@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-30T16:00:00Z",
+  "title": "Design System: Ai-Voice-Agent",
+  "extensions": {
+    "colorMeta": {
+      "storm-ink": { "role": "primary", "displayName": "Storm Ink", "canonical": "#0a0a0a", "tonalRamp": ["#0a0a0a", "#2b2c2e", "#54575c", "#686c71", "#8e949b", "#c0c5cc", "#e6e8eb", "#f4f4f3"] },
+      "ink-hover": { "role": "primary", "displayName": "Ink Hover", "canonical": "#2b2c2e" },
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "#f4f4f3" },
+      "panel-white": { "role": "neutral", "displayName": "Panel White", "canonical": "#ffffff" },
+      "reading-gray": { "role": "neutral", "displayName": "Reading Gray", "canonical": "#54575c" },
+      "faint-gray": { "role": "neutral", "displayName": "Faint Gray", "canonical": "#686c71" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#d5d6d8" },
+      "rain": { "role": "neutral", "displayName": "Rain", "canonical": "#8e949b" },
+      "mist": { "role": "neutral", "displayName": "Mist", "canonical": "#e6e8eb" },
+      "silver": { "role": "neutral", "displayName": "Silver", "canonical": "#c0c5cc" },
+      "success": { "role": "tertiary", "displayName": "Success", "canonical": "#15803d" },
+      "warning": { "role": "tertiary", "displayName": "Warning", "canonical": "#b45309" },
+      "danger": { "role": "tertiary", "displayName": "Danger", "canonical": "#c0271f" },
+      "info": { "role": "tertiary", "displayName": "Info", "canonical": "#2f5fa8" },
+      "dark-ground": { "role": "neutral", "displayName": "Dark Ground", "canonical": "#0a0a0a" },
+      "dark-panel": { "role": "neutral", "displayName": "Dark Panel", "canonical": "#121212" },
+      "dark-paper-text": { "role": "neutral", "displayName": "Dark Paper Text", "canonical": "#f2f2f0" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The dashboard's state word (capped at 84px) and the sign-in headline (capped at 118px); capitals; second line in rain." },
+      "headline": { "displayName": "Headline", "purpose": "Page titles; capitals." },
+      "figure": { "displayName": "Figure", "purpose": "Every count and rate; tabular numerals; not uppercased." },
+      "title": { "displayName": "Title", "purpose": "The dashboard greeting with the operator's name (32px), campaign names on cards, modal titles, empty-state headings; capitals." },
+      "body": { "displayName": "Body", "purpose": "Reading text; descriptions capped at 72ch." },
+      "label": { "displayName": "Label", "purpose": "Navigation, buttons, badges, tabs, table headers, card titles, field labels; tracked capitals." }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 18px 50px -18px rgba(10, 10, 10, .45)", "purpose": "Modals, toasts and the open mobile drawer only." }
+    ],
+    "motion": [
+      { "name": "ease", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Every transition." },
+      { "name": "dur-fast", "value": "120ms", "purpose": "Hover and colour changes." },
+      { "name": "dur", "value": "180ms", "purpose": "Borders, drawers, the navigation dot." },
+      { "name": "dur-slow", "value": "260ms", "purpose": "Page fade-in, progress widths, modal entry." },
+      { "name": "pulse-ring", "value": "1.6s infinite", "purpose": "The ring on a live status dot." }
+    ],
+    "breakpoints": [
+      { "name": "two-column", "value": "1100px" },
+      { "name": "drawer", "value": "960px" },
+      { "name": "phone", "value": "600px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one solid ink action on a view.",
+      "html": "<button class=\"ds-btn-primary\">New campaign</button>",
+      "css": ".ds-btn-primary { background: #0a0a0a; color: #fff; border: 1px solid #0a0a0a; border-radius: 4px; padding: 9px 16px; font: 700 11px/1.3 Archivo, 'Segoe UI', system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; cursor: pointer; transition: background 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background: #2b2c2e; border-color: #2b2c2e; } .ds-btn-primary:focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Outlined; inverts to ink on hover.",
+      "html": "<button class=\"ds-btn-secondary\">Import contacts</button>",
+      "css": ".ds-btn-secondary { background: transparent; color: #0a0a0a; border: 1px solid #0a0a0a; border-radius: 4px; padding: 9px 16px; font: 700 11px/1.3 Archivo, 'Segoe UI', system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; cursor: pointer; transition: background 120ms, color 120ms; } .ds-btn-secondary:hover { background: #0a0a0a; color: #f4f4f3; } .ds-btn-secondary:focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "White field with an ink border and a tracked-capital label.",
+      "html": "<label class=\"ds-field\"><span>Campaign name</span><input placeholder=\"e.g. Q4 fleet outreach\"></label>",
+      "css": ".ds-field { display: block; font-family: Archivo, 'Segoe UI', system-ui, sans-serif; } .ds-field span { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 7px; color: #0a0a0a; } .ds-field input { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid #0a0a0a; border-radius: 4px; background: #fff; color: #0a0a0a; font: 400 13.5px/1.35 Archivo, 'Segoe UI', system-ui, sans-serif; } .ds-field input::placeholder { color: #686c71; } .ds-field input:focus { outline: none; box-shadow: 0 0 0 1px #0a0a0a, 0 0 0 4px rgba(10,10,10,.22); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "A status as a printed mark: toned dot plus a word.",
+      "html": "<span class=\"ds-badge ds-badge-good\">Qualified</span> <span class=\"ds-badge ds-badge-warn\">No answer</span> <span class=\"ds-badge ds-badge-live\">Running</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 8px; border: 1px solid #0a0a0a; border-radius: 999px; color: #0a0a0a; font: 600 10px/1.6 Archivo, 'Segoe UI', system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; white-space: nowrap; } .ds-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #8e949b; } .ds-badge-good::before { background: #15803d; } .ds-badge-warn::before { background: #b45309; } .ds-badge-live { background: #c0c5cc; border-color: transparent; } .ds-badge-live::before { background: #14532d; }"
+    },
+    {
+      "name": "Figure Band",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "Counts in one ruled band, cells divided by hairlines.",
+      "html": "<div class=\"ds-figures\"><div><span>Total contacts</span><b>1,248</b><small>1,231 callable</small></div><div><span>Calls completed</span><b>143</b><small>82 answered</small></div><div><span>Meetings booked</span><b>8</b><small>by the AI agent</small></div></div>",
+      "css": ".ds-figures { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid #0a0a0a; font-family: Archivo, 'Segoe UI', system-ui, sans-serif; color: #0a0a0a; } .ds-figures div { padding: 20px 18px 18px 0; display: flex; flex-direction: column; gap: 4px; } .ds-figures div + div { padding-left: 18px; border-left: 1px solid #d5d6d8; } .ds-figures span { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: #54575c; } .ds-figures b { font-size: 52px; font-weight: 900; font-stretch: 62%; line-height: .92; font-variant-numeric: tabular-nums; } .ds-figures small { font-size: 11.5px; color: #54575c; }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "White panel on paper with a hairline and a label header.",
+      "html": "<div class=\"ds-card\"><header>Call outcomes</header><div>181 finished calls</div></div>",
+      "css": ".ds-card { background: #fff; border: 1px solid #d5d6d8; border-radius: 4px; font-family: Archivo, 'Segoe UI', system-ui, sans-serif; color: #0a0a0a; } .ds-card header { padding: 13px 18px; border-bottom: 1px solid #d5d6d8; font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; } .ds-card div { padding: 18px; font-size: 13.5px; }"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "description": "Tracked capitals; the active item is heavier and marked by a dot.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-on\" href=\"#\">Dashboard</a><a href=\"#\">Campaigns</a><a href=\"#\">Contacts</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; width: 208px; background: #f4f4f3; padding: 8px; } .ds-nav a { position: relative; padding: 9px 10px; border-radius: 4px; color: #54575c; text-decoration: none; font: 600 11.5px/1.4 Archivo, 'Segoe UI', system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; } .ds-nav a:hover { background: #e9e9e8; color: #0a0a0a; } .ds-nav a.ds-on { color: #0a0a0a; font-weight: 800; } .ds-nav a.ds-on::after { content: ''; position: absolute; right: 10px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #0a0a0a; } .ds-nav a:focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Alphabet Storm",
+    "overview": "Type is the material. The application's state is set as monumental black letters on paper, and what is in flight breaks off the end of a word as a plume of small letters. There is one family, one ink, and a ground of cool paper. Panels are white and divided by hairlines; nothing casts a shadow and nothing is a gradient.\n\nThe interface is an operator's control room used at a desk in daylight, so light is the primary theme. A dark theme inverts the same system: ink becomes the ground and paper becomes the text. Colour is reserved for status, and even there it is a dot beside a word, never a fill.",
+    "keyCharacteristics": [
+      "Extra-condensed black capitals for display and figures; regular width for reading.",
+      "Storm ink on paper, white panels, hairline rules, 4px corners.",
+      "Solid ink primary buttons and outlined secondary buttons, both in tracked capitals.",
+      "Status is a printed mark: a toned dot plus a word in an outlined pill.",
+      "Silver is a flat fill for anything in flight.",
+      "The letter plume is the only thing that moves, and only while the dialler is running."
+    ],
+    "rules": [
+      { "name": "The Dot and a Word Rule", "body": "A status is always a toned dot plus its word. The tone never fills a panel and never colours a routine figure.", "section": "colors" },
+      { "name": "The Flat Silver Rule", "body": "In flight is a flat silver fill. It never shimmers and is never a gradient.", "section": "colors" },
+      { "name": "The Ink Figures Rule", "body": "Figures are ink. Red is kept for a figure that needs action.", "section": "colors" },
+      { "name": "The One Grotesk Rule", "body": "No second family. The embedded voice client is the only exception and keeps its own face.", "section": "typography" },
+      { "name": "The Hairline Rule", "body": "Every division is a one-pixel rule. A surface that is not an overlay has no shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do set every count and rate in the figure style with tabular numerals.",
+      "Do divide with one-pixel hairlines and end page heads and figure bands with an ink rule.",
+      "Do show status as a toned dot plus a word.",
+      "Do keep the last glyph of a display word legible under the plume.",
+      "Do serve fonts, scripts and styles from the application's own origin; the content security policy blocks anything else.",
+      "Do keep `--color-primary` in `client-theme.css` equal to the first `--primary` in `styles.css`, and its dark `--color-background` equal to the dark `--surface`; a test checks both."
+    ],
+    "donts": [
+      "Don't use gradients, glows, glass or drop shadows on surfaces.",
+      "Don't colour a routine figure with a status tone.",
+      "Don't add a second typeface or an icon tile beside a figure.",
+      "Don't animate anything being read; only live dots pulse and only the plume drifts, while dialling.",
+      "Don't fill a panel with a status colour."
+    ]
+  }
+}

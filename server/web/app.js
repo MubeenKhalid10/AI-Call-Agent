@@ -115,27 +115,15 @@
   }
 
   // ------------------------------------------------------------------ motion
-  // One motion system: pages fade up on entry, counters count up once, the
+  // One motion system: pages fade in on entry, the
   // sidebar's indicator slides to the active item, progress bars morph from
   // their previous width. All of it is skipped when the person asked for
   // reduced motion, and none of it runs on the quiet 15 s refresh.
   const reducedMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  function countUp(root) {
-    if (reducedMotion()) return;
-    $$("[data-count]", root).forEach((el) => {
-      const target = Number(el.dataset.count);
-      if (!Number.isFinite(target) || target === 0 || el.dataset.counted) return;
-      el.dataset.counted = "1";
-      const start = performance.now(), dur = 650;
-      const step = (t) => { const p = Math.min(1, (t - start) / dur); const e = 1 - Math.pow(1 - p, 3); el.textContent = Math.round(target * e).toLocaleString(); if (p < 1) requestAnimationFrame(step); };
-      requestAnimationFrame(step);
-    });
-  }
   function animateIn(view) {
     view.classList.remove("page-enter");
     void view.offsetWidth;
     view.classList.add("page-enter");
-    countUp(view);
   }
   function moveNavIndicator() {
     const ind = $("#nav-indicator");
@@ -158,6 +146,59 @@
     bars.forEach((i, k) => { i.style.transition = "none"; i.style.width = before[k] ?? "0%"; });
     void box.offsetWidth;
     bars.forEach((i, k) => { i.style.transition = ""; i.style.width = targets[k]; });
+  }
+
+  // The letter plume: letters break off the end of a line of display type and
+  // thin out to the right. They are the letters of real names; they drift only
+  // while `live`, and hold still for reduced motion. Positions come from a fixed
+  // seed and the clock, so a quiet refresh redraws the plume where it was.
+  let stormFrame = 0, stormWatch = null;
+  function storm(canvas, origin, words, live = false) {
+    cancelAnimationFrame(stormFrame);
+    if (stormWatch) { stormWatch.disconnect(); stormWatch = null; }
+    if (!canvas || !origin || !canvas.getContext) return;
+    const host = canvas.parentElement;
+    const ctx = canvas.getContext("2d");
+    const letters = (words.filter(Boolean).join("").toUpperCase().replace(/[^A-Z0-9]/g, "") || "AIVOICEAGENT").split("");
+    let seed = 20240917;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const parts = Array.from({ length: 720 }, (_, i) => ({ u: 0.02 + 0.98 * Math.pow(rnd(), 1.15), v: rnd() * 2 - 1, ch: letters[i % letters.length], size: 0.05 + rnd() * 0.06, phase: rnd() * 6.283, speed: 0.5 + rnd(), rot: (rnd() - 0.5) * 1.4, rise: rnd() }));
+    const bites = Array.from({ length: 46 }, (_, i) => ({ d: rnd(), v: rnd(), ch: letters[(i * 7) % letters.length], size: 0.035 + rnd() * 0.04, rot: (rnd() - 0.5) * 1.6 }));
+    const moving = live && !reducedMotion();
+    const draw = (t) => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1), w = host.clientWidth, h = host.clientHeight;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const hb = host.getBoundingClientRect(), ob = origin.getBoundingClientRect();
+      const x0 = ob.right - hb.left, y0 = ob.top - hb.top + ob.height * 0.5, span = w - x0;
+      if (span < 120) return;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      if ("fontStretch" in ctx) ctx.fontStretch = "extra-condensed";
+      const cap = ob.height, paper = getComputedStyle(document.body).backgroundColor, ink = getComputedStyle(origin).color;
+      // Paper-coloured letters bite into the end of the word, densest at its edge.
+      ctx.fillStyle = paper;
+      for (const e of bites) {
+        ctx.font = `900 ${Math.max(5, cap * e.size).toFixed(1)}px Archivo, sans-serif`;
+        ctx.save(); ctx.translate(x0 - e.d * e.d * cap * 0.07, ob.top - hb.top + cap * (0.12 + e.v * 0.76)); ctx.rotate(e.rot); ctx.fillText(e.ch, 0, 0); ctx.restore();
+      }
+      // Ink letters leave from that edge, rise into the headroom and thin out.
+      ctx.fillStyle = ink;
+      for (const p of parts) {
+        const u = moving ? (p.u + t * 0.000012 * p.speed) % 1 : p.u;
+        const x = x0 + u * span * 1.04;
+        const lift = Math.sqrt(u) * cap * 0.85 * p.rise;
+        const y = Math.max(3, Math.min(ob.bottom - hb.top - cap * 0.06, y0 + p.v * cap * (0.4 + u * 0.35) - lift + (moving ? Math.sin(p.phase + t * 0.0007 * p.speed) * 3 : 0)));
+        ctx.globalAlpha = Math.pow(1 - u, 1.3) * 0.9;
+        ctx.font = `900 ${Math.max(4, cap * p.size * (1 - u * 0.3)).toFixed(1)}px Archivo, sans-serif`;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(p.rot * u); ctx.fillText(p.ch, 0, 0); ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    };
+    const loop = (t) => { if (!canvas.isConnected) return; if (!document.hidden) draw(t); stormFrame = requestAnimationFrame(loop); };
+    const begin = () => { if (!canvas.isConnected) return; if (moving) stormFrame = requestAnimationFrame(loop); else draw(0); };
+    (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(begin);
+    if (!moving && typeof ResizeObserver !== "undefined") { stormWatch = new ResizeObserver(() => { if (canvas.isConnected) draw(0); }); stormWatch.observe(host); }
   }
 
   // Theme: the system's choice unless the person toggled one; remembered per browser.
@@ -280,24 +321,19 @@
   }
   const liveBadge = (text) => badge(text, "", "live");
 
-  // A KPI card: label, a value that counts up on first render, its context,
-  // and an icon chosen by what the label says. Tone colours the value.
-  const STAT_ICONS = [[/contact/i, "contacts"], [/campaign/i, "campaigns"], [/meeting/i, "calendar"], [/qualif/i, "star"], [/fail|problem|error/i, "error"], [/answer/i, "phone-out"], [/call/i, "calls"], [/queue|remain|pending|scheduled/i, "clock"], [/valid|new|import/i, "check"], [/invalid|skip/i, "ban"], [/known|duplicate/i, "inbox"]];
+  // A figure: label, a value that counts up on first render, its context.
+  // Tone colours the value only when something is wrong.
   function stat(label, value, detail = "", t = "", extra = "") {
     const raw = value ?? "—";
     const n = typeof raw === "number" ? raw : typeof raw === "string" && /^[\d,]+$/.test(raw) ? Number(raw.replace(/,/g, "")) : null;
-    const ic = (STAT_ICONS.find(([re]) => re.test(label)) || [null, "activity"])[1];
-    return `<div class="card stat ${tone(t)} ${extra}"><span class="stat-icon" aria-hidden="true">${icon(ic)}</span><div class="label">${esc(label)}</div><div class="value" ${n != null && n > 0 ? `data-count="${n}"` : ""}>${esc(raw)}</div>${detail ? `<div class="detail">${esc(detail)}</div>` : ""}</div>`;
+    return `<div class="card stat ${tone(t)} ${extra}"><div class="label">${esc(label)}</div><div class="value" ${n != null && n > 0 ? `data-count="${n}"` : ""}>${esc(raw)}</div>${detail ? `<div class="detail">${esc(detail)}</div>` : ""}</div>`;
   }
-  // A donut of shares (real rows only), with a legend. Colours are the status tones.
+  // The total, then one ruled bar per outcome (real rows only). Bars are ink; the tone is the dot.
   function donut(rows, { centre = "", label = "" } = {}) {
     const total = rows.reduce((n, r) => n + r[1], 0);
     if (!total) return "";
-    const r = 42, c = 2 * Math.PI * r;
-    let offset = 0;
-    const arcs = rows.map(([, n, , t]) => { const len = (n / total) * c; const s = `<circle class="${t || "neutral"}" cx="50" cy="50" r="${r}" stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}"></circle>`; offset += len; return s; }).join("");
-    return `<div class="donut-wrap"><div class="donut" role="img" aria-label="${esc(label)}"><svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="${r}"></circle>${arcs}</svg><div class="center"><b>${esc(centre || fmtNum(total))}</b><span>${esc(label)}</span></div></div>
-      <div class="donut-legend">${rows.map(([name, n, share, t]) => `<div class="row"><span class="dot ${t || ""}"></span><span class="truncate" title="${esc(name)}">${esc(name)}</span><b>${fmtNum(n)}</b><span class="pct">${esc(share)}%</span></div>`).join("")}</div></div>`;
+    return `<div class="donut-wrap"><div class="donut"><div class="center"><b>${esc(centre || fmtNum(total))}</b><span>${esc(label)}</span></div></div>
+      <div class="donut-legend">${rows.map(([name, n, share, t]) => `<div class="row"><span class="dot ${t || ""}"></span><span class="truncate" title="${esc(name)}">${esc(name)}</span><span class="bar" aria-hidden="true"><i style="width:${Math.max(1, Math.min(100, Number(share) || 0))}%"></i></span><b>${fmtNum(n)}</b><span class="pct">${esc(share)}%</span></div>`).join("")}</div></div>`;
   }
   const metricStat = (m, label) => (m ? stat(label || m.label, m.available === false ? "n/a" : m.value, m.available === false ? "not available" : m.detail, m.tone) : "");
   const metric = (list, key) => (list || []).find((m) => m.key === key);
@@ -322,8 +358,8 @@
   };
   const alert = (kind, body, ic) => `<div class="alert ${kind}">${icon(ic || { good: "check", warn: "alert", bad: "error" }[kind] || "info")}<div class="body">${body}</div></div>`;
   const head = (title, sub, actions = "") => `<div class="page-head"><div class="titles"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
-  // The dashboard's header: a gradient hero with the greeting and the primary actions.
-  const hero = (title, sub, actions = "") => `<div class="hero"><span class="orb" aria-hidden="true"></span><span class="orb two" aria-hidden="true"></span><div class="titles"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
+  // The dashboard's header: the dialler's state in display type, the sentence and the primary actions.
+  const hero = (title, sub, actions = "") => `<div class="hero"><canvas class="storm" aria-hidden="true"></canvas><h1>${title}</h1><div class="foot">${sub ? `<p>${sub}</p>` : ""}${actions ? `<div class="actions">${actions}</div>` : ""}</div></div>`;
   const card = (title, body, actions = "", { sub = "", flush = false, id = "" } = {}) => `<div class="card" ${id ? `id="${id}"` : ""}>${title || actions ? `<div class="card-head"><div><h2>${esc(title)}</h2>${sub ? `<div class="sub">${sub}</div>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>` : ""}<div class="card-body ${flush ? "flush" : ""}">${body}</div></div>`;
   const field = (label, input, hint = "", { required = false } = {}) => `<label class="field"><span class="lbl ${required ? "req" : ""}">${esc(label)}</span>${input}${hint ? `<div class="hint">${hint}</div>` : ""}</label>`;
   const inp = (name, value = "", attrs = "") => `<input name="${name}" value="${esc(value)}" ${attrs}>`;
@@ -419,17 +455,16 @@
   // card carries the brand itself.
   const authShell = (card) => `<div class="auth">
       <aside class="auth-brand" aria-hidden="true">
-        <span class="orb a"></span><span class="orb b"></span><span class="orb c"></span><span class="grid-lines"></span>
+        <canvas class="storm"></canvas>
         <div class="brand"><span class="brand-mark">${icon("mic", "")}</span><div><div class="brand-name">Ai-Voice-Agent</div><div class="brand-sub">AI sales calling</div></div></div>
         <div>
-          <h2>An AI agent that makes the calls, <em>so your team takes the meetings.</em></h2>
+          <h2><span>An AI agent that</span><span data-storm-origin>makes the calls,</span><em>so your team takes</em><em>the meetings.</em></h2>
           <p class="lede">Import your contacts, launch a campaign, and the agent phones each contact, qualifies them from a real conversation and books the meeting.</p>
           <ul class="features">
-            <li>${icon("phone-out")}<span><b>Calls every contact in a campaign</b> within its calling hours, retrying the unanswered and stopping when asked.</span></li>
-            <li>${icon("sparkle")}<span><b>Qualifies and books meetings</b> — pain points, objections, decision role and the next step, recorded for every call.</span></li>
-            <li>${icon("knowledge")}<span><b>Answers from your knowledge base</b>, so every reply is grounded in your own documents.</span></li>
+            <li><b>Calls every contact in a campaign</b><span>Within its calling hours, retrying the unanswered and stopping when asked.</span></li>
+            <li><b>Qualifies and books meetings</b><span>Pain points, objections, decision role and the next step, recorded for every call.</span></li>
+            <li><b>Answers from your knowledge base</b><span>Replies draw on the documents you add.</span></li>
           </ul>
-          <div class="call-motif"><span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><div class="txt"><b>Live conversation</b><span>Listens, answers and hands over in real time</span></div></div>
         </div>
         <div class="foot">Outbound campaigns · Live transcripts · Calendar and CRM integrations</div>
       </aside>
@@ -456,6 +491,7 @@
       </form>
       <p class="foot" id="login-foot" hidden>Don't have an account? <a href="#/register">Create one</a></p>`);
     bindReveal($("#view"));
+    storm($(".auth-brand canvas"), $(".auth-brand [data-storm-origin]"), ["calls", "contacts", "campaign", "meetings", "agent"]);
     loadRegistration().then((r) => { const foot = $("#login-foot"); if (foot && r?.enabled) foot.hidden = false; });
     $("#login-form").onsubmit = async (e) => {
       e.preventDefault();
@@ -501,6 +537,7 @@
       <p class="foot">Already have an account? <a href="#/dashboard">Sign in</a></p>`);
     $(".auth-card", view).classList.add("wide");
     bindReveal(view);
+    storm($(".auth-brand canvas"), $(".auth-brand [data-storm-origin]"), ["calls", "contacts", "campaign", "meetings", "agent"]);
     loadRegistration().then((r) => {
       const form = $("#register-form");
       if (!form) return;
@@ -749,8 +786,9 @@
     const hour = new Date().getHours();
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     const who = state.principal?.name && state.principal.name !== "anonymous" ? `, ${esc(state.principal.name)}` : "";
-    const ENGINE_WORD = { running: "The dialler is placing calls.", idle: "The dialler is idle.", off: "Dialling is handled by a separate scheduler.", failed: "The dialler needs attention.", starting: "The dialler is starting.", stopping: "The dialler is stopping.", stopped: "The dialler has stopped." };
-    view.innerHTML = hero(`${greeting}${who}`, `${active ? `<b>${plural(active, "campaign is", "campaigns are")} running.</b> ` : rows.length ? "No campaign is running right now. " : "Import contacts and create your first campaign to begin. "}${esc(engine ? ENGINE_WORD[engine.state] || "" : "")} <span style="white-space:nowrap">${livePill()}</span>`,
+    const stateWord = engine ? (ENGINE[engine.state] || [null, human(engine.state)])[1] : "Dashboard";
+    const countLine = active ? `${plural(active, "campaign")} running` : rows.length ? "No campaign running" : "No campaigns yet";
+    view.innerHTML = hero(`<span data-storm-origin>${esc(stateWord)}</span><span class="spent">${esc(countLine)}</span>`, `<span class="greet">${greeting}${who}.</span> ${rows.length ? "" : "Import contacts and create your first campaign to begin. "}<span style="white-space:nowrap">${livePill()}</span>`,
       can("write") ? `<a class="btn" href="#/contacts/import">${icon("upload")} Import contacts</a><a class="btn primary" href="#/campaigns/new">${icon("plus")} New campaign</a>` : "") +
       banner +
       (noData ? card("", emptyState("sparkle", "Welcome. Let's make your first calls.", "Import your contacts, create a campaign, and the AI agent will call each contact, qualify them and book meetings.", can("write") ? `<div class="btn-group" style="margin-top:14px"><a class="btn primary" href="#/contacts/import">${icon("upload")} Import contacts</a><a class="btn" href="#/campaigns/new">Create a campaign</a></div>` : "")) : "") +
@@ -773,6 +811,7 @@
       ${card("", (snap.recent_calls || []).length ? `<div class="feed">${snap.recent_calls.slice(0, 12).map(activityOf).join("")}</div>` : emptyState("calls", "No calls yet", "Calls will appear here once a campaign is running.", "", true), "", { flush: true })}
       ${snap.notes?.length ? `<p class="muted small" style="margin-top:12px">${snap.notes.map(esc).join(" · ")}</p>` : ""}`;
     $$("[data-action]", view).forEach((b) => (b.onclick = () => runAction(b, () => route(true))));
+    storm($(".hero canvas", view), $("[data-storm-origin]", view), [...(snap.recent_calls || []).map((r) => r.prospect), ...running.map((c) => c.name)], engine?.state === "running");
   }
 
   // ------------------------------------------------------------ campaigns
@@ -1459,7 +1498,7 @@
     const pr = state.config?.providers || {};
     const t = state.config?.telephony || {};
     const src = `${bot}/client`;
-    view.innerHTML = head(`<span class="ai-ring" aria-hidden="true">${icon("sparkle")}</span> Live AI Agent`, "Talk to the agent from your browser, exactly as a contact hears it on the phone.", `<a class="btn ghost" href="${esc(src)}" target="_blank" rel="noopener">${icon("external")} Open in a new tab</a>`) +
+    view.innerHTML = head("Live AI Agent", "Talk to the agent from your browser, exactly as a contact hears it on the phone.", `<a class="btn ghost" href="${esc(src)}" target="_blank" rel="noopener">${icon("external")} Open in a new tab</a>`) +
       `<div class="grid main-side">
         <div class="stack">
           ${card("Voice client", `<iframe class="frame" id="frame" src="${esc(src)}/?theme=${currentTheme()}" allow="microphone; autoplay" title="Live AI agent voice client"></iframe>`, `<span class="pill-live"><span class="dot accent"></span> Embedded from the agent</span><button class="btn sm ghost" type="button" id="reload">${icon("refresh")} Reload</button>`, { flush: true }).replace('class="card"', 'class="card glow"')}
@@ -1467,7 +1506,7 @@
         </div>
         <div class="stack">
           ${card("Agent profile in use", `<p class="muted small" style="margin-bottom:10px">A browser session uses the deployment's default profile, not a campaign's.</p>` + kv([["Agent", esc(s.agent_name || "—")], ["Company", esc(s.company_name || "—")], ["Offer", esc(s.offer || "—")], ["Meeting ask", esc(s.meeting_ask || "—")], s.value_points?.length ? ["Value points", `<ul class="list-plain">${s.value_points.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`] : null]))}
-          ${card("Voice pipeline", `<div class="pipeline">${[["mic", "Speech to text", pr.stt], ["cpu", "Language model", pr.llm], ["volume", "Text to speech", pr.tts]].map(([ic, k, v], i) => `${i ? `<div class="arrow" aria-hidden="true">↓</div>` : ""}<div class="node"><span class="n">${icon(ic)}</span><div><div class="k">${esc(k)}</div><div class="v">${esc(v || "—")}</div></div></div>`).join("")}<div class="arrow" aria-hidden="true">↓</div><div class="node"><span class="n">${icon("knowledge")}</span><div><div class="k">Knowledge base</div><div class="v">${state.config?.knowledge_base ? badge("yes") : badge("no")}</div></div></div></div>`)}
+          ${card("Voice pipeline", `<div class="pipeline">${[["mic", "Speech to text", pr.stt], ["cpu", "Language model", pr.llm], ["volume", "Text to speech", pr.tts]].map(([ic, k, v]) => `<div class="node"><span class="n">${icon(ic)}</span><div><div class="k">${esc(k)}</div><div class="v">${esc(v || "—")}</div></div></div>`).join("")}<div class="node"><span class="n">${icon("knowledge")}</span><div><div class="k">Knowledge base</div><div class="v">${state.config?.knowledge_base ? badge("yes") : badge("no")}</div></div></div></div>`)}
           ${can("write") ? card("Test call to a phone", `<form id="f"><div class="row one">${field("Phone number", inp("phone", "", 'required type="tel" placeholder="+92 300 1234567"'), "Include the country code.", { required: true })}</div><div class="row one">${field("Campaign", select("campaign_id", campaigns.filter((c) => c.status === "ACTIVE" || c.status === "DRAFT" || c.status === "PAUSED").map((c) => [c.id, `${c.name} (${statusLabel(c.status)})`])), "The call uses this campaign's agent profile and is placed by the dialler while the campaign is running.")}</div><div class="form-actions"><button class="btn primary" type="submit" ${campaigns.length && t.configured ? "" : "disabled"}>${icon("calls")} Queue test call</button></div>${t.configured ? "" : `<p class="muted small">No outbound carrier is configured, so a phone call cannot be placed.</p>`}${campaigns.length ? "" : `<p class="muted small">Create a campaign first.</p>`}</form>`) : ""}
           <details class="panel"><summary>Diagnostics</summary><div class="card-body">${kv([["Client address", `<code>${esc(src)}</code>`], ["Carrier", esc(t.provider || "—")], ["Caller ID", esc(t.from_number || "Not set")]])}</div></details>
         </div>
