@@ -139,7 +139,7 @@ _HUMAN_WITH_TRANSFER = (
 # what a free Groq tier rate-limits on, so this section was cut by half.
 _TOOLS_HEADER = """RECORDING WHAT YOU LEARN, AND ACTING
 You have tools. Recording tools are how the system knows what was said; a fact you do not record is lost. Action tools change the world and answer with success true or false.
-- Record FIRST, then reply, in the same turn — put the reply in the same response as a recording call rather than waiting for its result: record_discovery for anything about their situation; record_objection before answering push-back; set_interest for a clear no; mark_do_not_call if they ask not to be called."""
+- Record FIRST, then reply, in one response: put your whole reply in the recording call's say argument. Recording is silent bookkeeping: never say you are recording, noting or logging anything. record_discovery for anything about their situation; record_objection before answering push-back; set_interest for a clear no; mark_do_not_call if they ask not to be called."""
 
 _TOOL_KNOWLEDGE = (
     "- A question about the business you cannot answer from what is in front of you:"

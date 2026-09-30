@@ -283,6 +283,69 @@ async def check_wrapper() -> None:
 # --- Persistence: once ------------------------------------------------------------------------
 
 
+async def check_carried_reply() -> None:
+    """Phase 43: a silent recording call whose ``say`` argument carries the reply."""
+    print("\n=== a reply carried in the call (2026-09-23) ===")
+    from pipecat.frames.frames import LLMFullResponseEndFrame as _End
+    from pipecat.frames.frames import LLMFullResponseStartFrame as _Start
+    from pipecat.frames.frames import LLMTextFrame as _Text
+
+    from src.spoken_text import TOOL_REPLY_METADATA
+
+    world = everything()
+    await world.says("Hello")
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "record_discovery", pain_point="fuel bill out of control", say="Right, fuel is the big one. Roughly what does it run you a month?")
+    frames = world.llm.frames
+    kinds = [type(f).__name__ for f in frames]
+    check("a silent call with a reply: released, no second request", result["success"] and released(properties), str(properties))
+    check("and the reply is pushed as one response: start, text, end", kinds == ["LLMFullResponseStartFrame", "LLMTextFrame", "LLMFullResponseEndFrame"], str(kinds))
+    check("with the model's own words", isinstance(frames[1], _Text) and frames[1].text == "Right, fuel is the big one. Roughly what does it run you a month?" if len(frames) == 3 else False)
+    check("each frame marked as a carried reply, naming the tool", all(f.metadata.get(TOOL_REPLY_METADATA) == "record_discovery" for f in frames) if frames else False)
+    check("and the fact is recorded", "fuel bill out of control" in str(world.record.pain_points))
+    check("the say argument is not stored as discovery", "Roughly what does it run" not in str(world.record.pain_points))
+
+    world.conversation.speech = spoken_tally(spoke=True)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "record_discovery", impact="late deliveries", say="Late deliveries, got it.")
+    check("the model spoke AND carried a reply: released on the speech, the carried one is not spoken twice", released(properties) and world.llm.frames == [])
+
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "record_discovery", current_process="spreadsheets", say="   ")
+    check("an empty reply: the second request runs, as before", result["success"] and properties is None and world.llm.frames == [])
+
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "record_discovery", desired_outcome="fewer empty miles", say="<think>they want fewer empty miles</think> NEUTRAL")
+    check("a reply the filter would silence entirely: the second request runs", result["success"] and properties is None and world.llm.frames == [], str(properties))
+
+    world.conversation.speech = spoken_tally(spoke=False, calls=2)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "set_interest", level="CURIOUS", reason="asked about pricing", say="Happy to walk you through it.")
+    check("two calls in one response: the second request runs even with a reply carried", properties is None and world.llm.frames == [])
+
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "record_objection", kind="PRICE", detail="too expensive")
+    check("an objection keeps the guided second request: no say argument, nothing carried", result["success"] and properties is None and world.llm.frames == [] and "say" not in world.tools["record_objection"].properties)
+
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "set_interest", level="NOT_INTERESTED", reason="not for us", say="Understood, thanks for your time.")
+    check("a no that stops the selling still runs the second request (the goodbye and end_call follow)", result["success"] and result.get("data", {}).get("stopped_selling") and properties is None and world.llm.frames == [], str(result))
+
+    world = everything()
+    await world.says("Hello")
+    world.conversation.speech = spoken_tally(spoke=False)
+    world.llm.frames.clear()
+    result, properties = await call_capturing(world, "schedule_callback", when="2026-09-24T15:00", say="Tomorrow at three, done.")
+    check("a blocking tool ignores a carried reply: its result decides the wording", properties is None and world.llm.frames == [] or (properties is not None and properties.run_llm is not False), str(properties))
+    carrying = {name for name, schema in world.tools.items() if "say" in schema.properties}
+    check("the say argument is on the four carrying tools, not on record_objection, not on any blocking tool", carrying == {"record_discovery", "set_interest", "move_to_stage", "request_meeting"}, str(sorted(carrying)))
+
+
 async def check_persistence_once() -> None:
     print("\n=== the record is written once, and the sink hears once ===")
     world = everything()
@@ -399,6 +462,7 @@ async def requests_for(script: list[tuple[str, list[tuple[str, dict[str, Any]]]]
         observers=[SpeechObserver(speech, llm=llm, spoken_text=spoken_text)],
         start_timeout=10.0,
     )
+    world.context_messages = [dict(m) if isinstance(m, dict) else m for m in context.messages]
     return llm.requests, world
 
 
@@ -413,6 +477,20 @@ async def check_pipeline_requests() -> None:
 
     requests, world = await requests_for([("", [("record_discovery", {"pain_point": "forty trucks, fuel"})]), ("Right, forty trucks. What does the fuel cost you?", [])])
     check("a recording call the model made without speaking is still two: the reply comes from the second", requests == 2 and "forty trucks" in str(world.record.pain_points), str(requests))
+
+    # Phase 43: the same silent call, with the reply carried in it.
+    requests, world = await requests_for([("", [("record_discovery", {"pain_point": "forty trucks, fuel", "say": "Right, forty trucks. What does the fuel cost you a month?"})])])
+    check("a silent recording call that carries its reply is ONE request", requests == 1 and "forty trucks" in str(world.record.pain_points), str(requests))
+    spoken = [m for m in world.context_messages if m.get("role") == "assistant" and "fuel cost you a month" in str(m.get("content"))]
+    check("and the carried reply went through the filter into the context, once", len(spoken) == 1, str(world.context_messages[-3:]))
+    tool_messages = [m for m in world.context_messages if m.get("role") == "tool"]
+    check("after the tool result, so the context reads call, result, reply", tool_messages and world.context_messages.index(tool_messages[-1]) < world.context_messages.index(spoken[0]) if spoken else False)
+
+    requests, world = await requests_for([("", [("record_discovery", {"pain_point": "fuel", "say": "<think>hmm</think>"})]), ("Right, fuel. What does it cost you?", [])])
+    check("a carried reply the filter silences is not enough: two requests, the reply from the second", requests == 2, str(requests))
+
+    requests, world = await requests_for([("", [("check_calendar_availability", {"day": "2026-09-07", "say": "Let me look."})]), ("I have ten or half past ten on Monday.", [])])
+    check("a calendar call is still two requests, a carried reply or not", requests == 2, str(requests))
 
     requests, world = await requests_for([("Let me check Monday.", [("check_calendar_availability", {"day": "2026-09-07"})]), ("I have ten or half past ten on Monday.", [])])
     check("a calendar call is two requests even when the model spoke: it must see the times", requests == 2 and world.conversation.offered_slots, str(requests))
@@ -437,7 +515,7 @@ def check_wiring() -> None:
     check("attached to the conversation", "conversation.speech = speech" in bot)
     check("with the filter still in its place in the pipeline", "            spoken_text,\n            tts," in bot)
     playbook = (SERVER / "src" / "conversation" / "playbook.py").read_text(encoding="utf-8")
-    check("the prompt lets the reply travel with the recording call", "put the reply in the same response as a recording call" in playbook and "Record FIRST, then reply" in playbook)
+    check("the prompt puts the reply in the recording call's say argument", "put your whole reply in the recording call's say argument" in playbook and "Record FIRST, then reply" in playbook)
     validate = (SERVER / "validate.py").read_text(encoding="utf-8")
     check("the checks are in the validation run", '"test_tool_round_trips"' in validate)
 
@@ -447,6 +525,7 @@ async def main() -> int:
     check_classification()
     await check_tally_and_filter()
     await check_wrapper()
+    await check_carried_reply()
     await check_persistence_once()
     await check_blocking_tools()
     await check_pipeline_requests()

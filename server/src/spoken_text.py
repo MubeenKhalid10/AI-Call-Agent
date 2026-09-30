@@ -799,4 +799,10 @@ def _rewritten(frame: LLMTextFrame, text: str) -> LLMTextFrame:
     return out
 
 
-__all__ = ["ScrubStats", "SpokenTextFilter", "SpokenTextScrubber", "strip_speaker_label", "strip_tool_words"]
+#: Metadata key on the start, text and end frames a tool wrapper pushes for
+#: a reply that travelled in the call (Phase 43, `conversation.toolkit`). The
+#: value is the tool's name. A latency tracker counts LLM requests by start
+#: frames; these are not requests.
+TOOL_REPLY_METADATA = "tool_reply"
+
+__all__ = ["TOOL_REPLY_METADATA", "ScrubStats", "SpokenTextFilter", "SpokenTextScrubber", "strip_speaker_label", "strip_tool_words"]

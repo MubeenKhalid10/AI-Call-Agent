@@ -1,0 +1,33 @@
+# The application process: the existing `uv run app.py`, unchanged, as a service.
+# It runs the campaign engine (scheduler + queue + dialling), the n8n outbox
+# deliverer, and the dashboard / automation API on loopback port 7900. The
+# public UI stays on Vercel (Option A); nothing here is exposed.
+#
+#   sudo systemctl start|stop|restart|status ai-agent-app
+#   journalctl -u ai-agent-app -f            # live log (also server/logs/app.log via LOG_FILE)
+
+[Unit]
+Description=AI Call Agent - application, campaign engine and outbox (uv run app.py on 127.0.0.1:7900)
+After=network-online.target ai-agent-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AI-Call-Agent/server
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run --no-sync app.py
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+# SIGINT = the documented "Ctrl+C once": stop placing calls, let the ones in
+# progress finish (WORKER_SHUTDOWN_SECS, 30 s by default).
+KillSignal=SIGINT
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-agent-app
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+# Caddy: the one public HTTPS/WSS address of the AI Call Agent on the Oracle VM.
+#
+# Replace <YOUR_HOSTNAME> with the DuckDNS name (e.g. myagent.duckdns.org).
+# setup-vm.sh does this substitution for you.
+#
+# Everything on this hostname is forwarded to the bot's runner (`uv run bot.py`)
+# on loopback port 7860, which is where SignalWire streams call audio (/ws), where
+# the Vercel Live Agent page frames the browser client (/client, /api/offer), and
+# where the probes live (/healthz, /readyz). Caddy obtains and renews the
+# Let's Encrypt certificate itself, upgrades websocket connections itself, and
+# adds X-Forwarded-For / X-Forwarded-Proto. Nothing else on the VM is reachable:
+# app.py (7900) stays on loopback, as SECURITY.md section 4 describes.
+
+<YOUR_HOSTNAME> {
+	# The Prometheus scrape routes stay private (MONITORING_TOKEN is not set).
+	@private path /metrics /metrics.json
+	respond @private 404
+
+	reverse_proxy 127.0.0.1:7860
+}

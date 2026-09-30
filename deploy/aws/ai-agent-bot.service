@@ -1,0 +1,41 @@
+# The AI voice agent: the existing `uv run bot.py`, unchanged, as a service.
+# Installed by setup-ec2.sh (the /home/ubuntu paths are rewritten to $HOME).
+#
+#   sudo systemctl start|stop|restart|status ai-agent-bot
+#   journalctl -u ai-agent-bot -f            # live log (also server/logs/bot.log via LOG_FILE)
+
+[Unit]
+Description=AI Call Agent - voice bot (uv run bot.py on 127.0.0.1:7860)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AI-Call-Agent/server
+# bot.py reads server/.env itself (load_dotenv); nothing is duplicated here.
+Environment=PYTHONUNBUFFERED=1
+# The runner's origin allow-list (browser routes). Set here, not in .env, so the
+# copied .env stays as it is; nginx stamps this origin on the carrier's /ws only.
+Environment=PIPECAT_ALLOWED_ORIGINS=https://<YOUR_HOSTNAME>
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+# --no-sync: run the environment `uv sync --frozen --all-extras` built; never
+# re-resolve or touch the network at boot.
+ExecStart=/home/ubuntu/.local/bin/uv run --no-sync bot.py
+Restart=always
+RestartSec=5
+# Preflight opens the knowledge base and warms the models; the first start
+# also downloads the embedding and VAD models.
+TimeoutStartSec=300
+# Ctrl+C semantics: sessions in progress get a chance to end cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-agent-bot
+# The process writes only under its own checkout (server/logs) and $HOME (model caches).
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

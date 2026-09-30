@@ -43,13 +43,21 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from loguru import logger
 from pipecat.adapters.schemas.direct_function import DirectFunctionWrapper
 from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.frames.frames import FunctionCallResultProperties
+from pipecat.frames.frames import (
+    FunctionCallResultProperties,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+)
 from pipecat.services.llm_service import FunctionCallParams
+
+from src.spoken_text import TOOL_REPLY_METADATA, SpokenTextScrubber
 
 from .results import INTERNAL_ERROR, INVALID_ARGUMENTS, ActionRecord, ToolResult
 
@@ -109,6 +117,14 @@ None; the guard notices the callback was used and does not report twice.
 #: so this is milliseconds in practice; the ceiling is for a pipeline that is
 #: wedged, where the old behaviour is the safe one.
 RESPONSE_END_WAIT_SECS = 2.0
+
+#: The argument a releasing tool carries its reply in. Phase 43. The model
+#: on Cerebras (qwen-3.8) answers a recording call with the call alone — no
+#: text in the same response — so the Phase 32 release never applied and every
+#: recording turn paid a second LLM request (measured 2026-09-23: caller heard
+#: the reply after 4.08 s on tool turns against 2.14 s on plain ones). With the
+#: reply in the call, the wrapper speaks it and the turn is released.
+SAY_ARGUMENT = "say"
 
 
 def strict_tool(
@@ -206,11 +222,25 @@ def strict_tool(
         if isinstance(returned, ToolResult):
             result = returned
             _log(name, audit, arguments, result, started)
-            turn = await _turn_properties(name, result, release, speech)
-            if turn is not None:
-                await params.result_callback(result.to_dict(), properties=turn)
-            else:
-                await params.result_callback(result.to_dict())
+            verdict = await _turn_verdict(name, result, release, speech)
+            if verdict is _Verdict.SPOKEN:
+                logger.info(f"TOOL | {name} | reply already spoken in the same response; no second LLM request")
+                await params.result_callback(result.to_dict(), properties=FunctionCallResultProperties(run_llm=False))
+                return
+            reply = _speakable_reply(arguments.get(SAY_ARGUMENT)) if verdict is _Verdict.SILENT else ""
+            llm = getattr(params, "llm", None)
+            if reply and llm is not None:
+                # Phase 43: the reply travelled in the call. The result goes
+                # first, so the context reads call, result, reply; the reply
+                # then takes the ordinary path — spoken-text filter, TTS,
+                # transcript — as if the model had streamed it.
+                await params.result_callback(result.to_dict(), properties=FunctionCallResultProperties(run_llm=False))
+                await _speak_tool_reply(llm, name, reply)
+                logger.info(f"TOOL | {name} | reply carried in the call ({len(reply)} chars); no second LLM request")
+                return
+            if verdict is _Verdict.SILENT:
+                logger.debug(f"TOOL | {name} | the model called without speaking and carried no reply; the second request runs")
+            await params.result_callback(result.to_dict())
             return
 
         if reported:
@@ -239,45 +269,97 @@ def strict_tool(
     )
 
 
+class _Verdict(Enum):
+    """What the tally says about the response a releasing tool was called in."""
+
+    SECOND_REQUEST = "second request"  # as before: Pipecat runs the LLM again
+    SPOKEN = "spoken"  # the model spoke in the same response: that reply is the turn
+    SILENT = "silent"  # releasable, one call, but the model said nothing
+
+
+async def _turn_verdict(
+    name: str,
+    result: ToolResult,
+    release: Callable[[ToolResult], bool] | None,
+    speech: Callable[[], Any] | None,
+) -> _Verdict:
+    """Whether this result may end the turn without a second LLM request. Phase 32.
+
+    ``SECOND_REQUEST`` means "as before": Pipecat runs the LLM again with the
+    result in context. ``SPOKEN`` only when every condition holds — see
+    `strict_tool`'s ``release``. ``SILENT`` is the Phase 43 case: every
+    condition but the speech holds, so a reply carried in the call may be
+    spoken instead of running the LLM again. Never raises: the result is what
+    matters, and the second request is the safe default.
+    """
+    if release is None or speech is None:
+        return _Verdict.SECOND_REQUEST
+    try:
+        if not release(result):
+            return _Verdict.SECOND_REQUEST
+        tally = speech()
+        if tally is None:
+            return _Verdict.SECOND_REQUEST
+        response = tally.current_response
+        if response == 0:
+            return _Verdict.SECOND_REQUEST
+        if not await tally.wait_ended(response, RESPONSE_END_WAIT_SECS):
+            logger.debug(f"TOOL | {name} | response {response} has not ended; the second request runs")
+            return _Verdict.SECOND_REQUEST
+        calls = tally.calls_in(response)
+        if calls != 1:
+            logger.debug(f"TOOL | {name} | {calls} tool call(s) in response {response}; the second request runs")
+            return _Verdict.SECOND_REQUEST
+        if not tally.spoke_in(response):
+            return _Verdict.SILENT
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.exception(f"TOOL | {name} | could not decide whether the turn is complete; the second request runs")
+        return _Verdict.SECOND_REQUEST
+    return _Verdict.SPOKEN
+
+
 async def _turn_properties(
     name: str,
     result: ToolResult,
     release: Callable[[ToolResult], bool] | None,
     speech: Callable[[], Any] | None,
 ) -> FunctionCallResultProperties | None:
-    """Whether this result ends the turn without a second LLM request. Phase 32.
+    """The Phase 32 answer alone: ``run_llm=False`` when the model already spoke, else None."""
+    verdict = await _turn_verdict(name, result, release, speech)
+    if verdict is _Verdict.SILENT:
+        logger.debug(f"TOOL | {name} | the model called without speaking; the second request runs")
+    return FunctionCallResultProperties(run_llm=False) if verdict is _Verdict.SPOKEN else None
 
-    None means "as before": Pipecat runs the LLM again with the result in
-    context. ``run_llm=False`` only when every condition holds — see
-    `strict_tool`'s ``release``. Never raises: the result is what matters, and
-    the second request is the safe default.
+
+def _speakable_reply(text: Any) -> str:
+    """The ``say`` argument as it will be spoken, or "" when nothing of it can be.
+
+    A reply that the spoken-text filter would reduce to nothing — markup, a
+    tool's own words, whitespace — must not release the turn, or the caller
+    would hear silence where the second request used to answer.
     """
-    if release is None or speech is None:
-        return None
-    try:
-        if not release(result):
-            return None
-        tally = speech()
-        if tally is None:
-            return None
-        response = tally.current_response
-        if response == 0:
-            return None
-        if not await tally.wait_ended(response, RESPONSE_END_WAIT_SECS):
-            logger.debug(f"TOOL | {name} | response {response} has not ended; the second request runs")
-            return None
-        calls = tally.calls_in(response)
-        if calls != 1:
-            logger.debug(f"TOOL | {name} | {calls} tool call(s) in response {response}; the second request runs")
-            return None
-        if not tally.spoke_in(response):
-            logger.debug(f"TOOL | {name} | the model called without speaking; the second request runs")
-            return None
-    except Exception:  # noqa: BLE001 - see the docstring
-        logger.exception(f"TOOL | {name} | could not decide whether the turn is complete; the second request runs")
-        return None
-    logger.info(f"TOOL | {name} | reply already spoken in the same response; no second LLM request")
-    return FunctionCallResultProperties(run_llm=False)
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    scrubber = SpokenTextScrubber()
+    spoken = scrubber.feed(text) + scrubber.finish()
+    return text.strip() if spoken.strip() else ""
+
+
+async def _speak_tool_reply(llm: Any, name: str, reply: str) -> None:
+    """Push the reply carried in a call as if the model had streamed it. Phase 43.
+
+    Start, text, end — the same three frames a response is made of — pushed
+    from the LLM service so they take the ordinary path: the spoken-text
+    filter (which scrubs it and adds any read-back owed), the TTS, the
+    transport, and the assistant aggregator, which records it in the context
+    after the tool result it follows. The LLM service stamps ``skip_tts`` on
+    them exactly as it does on its own frames, so a text-mode eval stays
+    silent. Each frame carries `TOOL_REPLY_METADATA` so a latency tracker can
+    tell it from a request of its own.
+    """
+    for frame in (LLMFullResponseStartFrame(), LLMTextFrame(text=reply), LLMFullResponseEndFrame()):
+        frame.metadata[TOOL_REPLY_METADATA] = name
+        await llm.push_frame(frame)
 
 
 def _refresh_advertised(

@@ -31,10 +31,11 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—");
-  const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString([], { dateStyle: "medium" }) : "—");
-  const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { timeStyle: "short" }) : "—");
-  const fmtDur = (s) => (s == null ? "—" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`);
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const dayOf = (d) => `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  const fmtDate = (iso) => { if (!iso) return "—"; const d = new Date(iso); return `${dayOf(d)}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+  const fmtDay = (iso) => (iso ? dayOf(new Date(iso)) : "—");
+    const fmtDur = (s) => (s == null ? "—" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`);
   const fmtNum = (n) => (n == null || n === "" ? "—" : typeof n === "number" ? n.toLocaleString() : String(n));
   const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
   const human = (v) => String(v ?? "—").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
@@ -303,7 +304,7 @@
 
   function table(columns, rows, { empty = "Nothing here yet.", emptyHtml = "", rowAttr, cls = "" } = {}) {
     if (!rows || !rows.length) return emptyHtml || emptyState("inbox", empty);
-    const head = columns.map((c) => `<th${c.num ? ' class="num"' : c.actions ? ' class="actions"' : ""}${c.sort ? ` data-sort="${c.sort}"` : ""}>${esc(c.label)}</th>`).join("");
+    const head = columns.map((c) => `<th${c.num ? ' class="num"' : c.actions ? ' class="actions"' : ""}${c.sort ? ` data-sort="${c.sort}"` : ""}>${c.actions && !c.label ? '<span class="visually-hidden">Actions</span>' : esc(c.label)}</th>`).join("");
     const body = rows.map((r) => `<tr ${rowAttr ? rowAttr(r) : ""}>${columns.map((c) => `<td${c.num ? ' class="num"' : c.actions ? ' class="actions"' : c.primary ? ' class="primary-cell"' : ""}>${c.render ? c.render(r) : esc(r[c.key] ?? "—")}</td>`).join("")}</tr>`).join("");
     return `<div class="tbl-wrap"><table class="tbl ${cls}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   }
@@ -320,9 +321,9 @@
       <details class="tech"><summary>Technical details</summary><pre>${esc(f.detail)}</pre></details></div>`;
   };
   const alert = (kind, body, ic) => `<div class="alert ${kind}">${icon(ic || { good: "check", warn: "alert", bad: "error" }[kind] || "info")}<div class="body">${body}</div></div>`;
-  const head = (title, sub, actions = "", { eyebrow = "" } = {}) => `<div class="page-head"><div class="titles">${eyebrow ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ""}<h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
+  const head = (title, sub, actions = "") => `<div class="page-head"><div class="titles"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
   // The dashboard's header: a gradient hero with the greeting and the primary actions.
-  const hero = (title, sub, actions = "", eyebrow = "") => `<div class="hero"><span class="orb" aria-hidden="true"></span><span class="orb two" aria-hidden="true"></span><div class="titles">${eyebrow ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ""}<h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
+  const hero = (title, sub, actions = "") => `<div class="hero"><span class="orb" aria-hidden="true"></span><span class="orb two" aria-hidden="true"></span><div class="titles"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>`;
   const card = (title, body, actions = "", { sub = "", flush = false, id = "" } = {}) => `<div class="card" ${id ? `id="${id}"` : ""}>${title || actions ? `<div class="card-head"><div><h2>${esc(title)}</h2>${sub ? `<div class="sub">${sub}</div>` : ""}</div>${actions ? `<div class="actions">${actions}</div>` : ""}</div>` : ""}<div class="card-body ${flush ? "flush" : ""}">${body}</div></div>`;
   const field = (label, input, hint = "", { required = false } = {}) => `<label class="field"><span class="lbl ${required ? "req" : ""}">${esc(label)}</span>${input}${hint ? `<div class="hint">${hint}</div>` : ""}</label>`;
   const inp = (name, value = "", attrs = "") => `<input name="${name}" value="${esc(value)}" ${attrs}>`;
@@ -331,8 +332,8 @@
   const lines = (text) => String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
   const formData = (form) => Object.fromEntries(new FormData(form).entries());
   const kv = (pairs) => `<dl class="kv">${pairs.filter((p) => p).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v == null || v === "" ? '<span class="muted">—</span>' : v}</dd>`).join("")}</dl>`;
-  const facts = (items) => `<div class="facts">${items.filter((f) => f).map(([k, v]) => `<div class="fact"><div class="k">${esc(k)}</div><div class="v">${v == null || v === "" ? '<span class="muted">—</span>' : v}</div></div>`).join("")}</div>`;
-  const progressBar = (segments, { lg = false, title = "" } = {}) => `<div class="progress ${lg ? "lg" : ""}" role="progressbar" ${title ? `title="${esc(title)}" aria-label="${esc(title)}"` : ""}>${segments.filter((s) => s[0] > 0).map(([w, t]) => `<i class="${t}" style="width:${Math.max(0, Math.min(100, w))}%"></i>`).join("")}</div>`;
+  const facts = (items) => `<div class="facts">${items.filter((f) => f).map(([k, v]) => `<div class="fact ${String(v ?? "").replace(/<[^>]*>/g, "").length > 64 ? "wide" : ""}"><div class="k">${esc(k)}</div><div class="v">${v == null || v === "" ? '<span class="muted">—</span>' : v}</div></div>`).join("")}</div>`;
+  const progressBar = (segments, { lg = false, title = "" } = {}) => `<div class="progress ${lg ? "lg" : ""}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Math.round(segments[0]?.[0] || 0)))}" ${title ? `title="${esc(title)}" aria-label="${esc(title)}"` : ""}>${segments.filter((s) => s[0] > 0).map(([w, t]) => `<i class="${t}" style="width:${Math.max(0, Math.min(100, w))}%"></i>`).join("")}</div>`;
   const bars = (rows) => rows.length ? `<div class="bars">${rows.map(([label, n, share, t]) => `<div class="bar-row"><span class="truncate" title="${esc(label)}">${esc(label)}</span><div class="track"><i class="${t || ""}" style="width:${Math.max(1, Math.min(100, share))}%"></i></div><span class="n">${fmtNum(n)} · ${share}%</span></div>`).join("")}</div>` : "";
 
   async function withButton(btn, fn, label = "") {
@@ -345,14 +346,14 @@
   }
 
   // Sorting a rendered table on the client: the page in view, not the database.
-  function sortable(root, rows, draw) {
-    let key = null, dir = 1;
+  // `draw` redraws the table and calls this again, so the current key and
+  // direction are passed back in; a second click on a column reverses it.
+  function sortable(root, rows, draw, key = null, dir = 1) {
     $$("th[data-sort]", root).forEach((th) => {
       th.classList.add("sortable");
-      th.setAttribute("role", "button"); th.tabIndex = 0;
+      th.tabIndex = 0;
       const go = () => { if (key === th.dataset.sort) dir = -dir; else { key = th.dataset.sort; dir = 1; } draw([...rows].sort((a, b) => { const x = a[key] ?? "", y = b[key] ?? ""; return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y))) * dir; }), key, dir); };
       th.onclick = go; th.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
-      if (key === th.dataset.sort) th.classList.add("sorted", dir < 0 ? "desc" : "");
     });
   }
 
@@ -445,7 +446,7 @@
     $("#crumbs").innerHTML = "<b>Sign in</b>";
     $$("#nav a").forEach((a) => { a.classList.remove("active"); a.removeAttribute("aria-current"); });
     $("#view").innerHTML = authShell(`${mobileBrand()}
-      <div class="eyebrow">Welcome back</div><h1>Sign in to your workspace</h1><p>Your campaigns, calls and the AI agent, in one place.</p>
+      <h1>Sign in to your workspace</h1><p>Your campaigns, calls and the AI agent, in one place.</p>
       ${error ? alert("bad", esc(error)) : ""}
       ${notice ? alert(notice.kind || "good", esc(notice.text)) : ""}
       <form id="login-form" novalidate>
@@ -487,7 +488,7 @@
     $$("#nav a").forEach((a) => { a.classList.remove("active"); a.removeAttribute("aria-current"); });
     const view = $("#view");
     view.innerHTML = authShell(`${mobileBrand()}
-      <div class="eyebrow">Get set up</div><h1>Create your account</h1><p>Register to see your campaigns and calls.</p>
+      <h1>Create your account</h1><p>Register to see your campaigns and calls.</p>
       <div id="register-alert"></div>
       <form id="register-form" novalidate>
         ${field("Name", inp("name", "", 'autocomplete="username" required autofocus maxlength="64"'), "Your sign-in name: letters, digits, dots, underscores or dashes.", { required: true })}
@@ -750,7 +751,7 @@
     const who = state.principal?.name && state.principal.name !== "anonymous" ? `, ${esc(state.principal.name)}` : "";
     const ENGINE_WORD = { running: "The dialler is placing calls.", idle: "The dialler is idle.", off: "Dialling is handled by a separate scheduler.", failed: "The dialler needs attention.", starting: "The dialler is starting.", stopping: "The dialler is stopping.", stopped: "The dialler has stopped." };
     view.innerHTML = hero(`${greeting}${who}`, `${active ? `<b>${plural(active, "campaign is", "campaigns are")} running.</b> ` : rows.length ? "No campaign is running right now. " : "Import contacts and create your first campaign to begin. "}${esc(engine ? ENGINE_WORD[engine.state] || "" : "")} <span style="white-space:nowrap">${livePill()}</span>`,
-      can("write") ? `<a class="btn" href="#/contacts/import">${icon("upload")} Import contacts</a><a class="btn primary" href="#/campaigns/new">${icon("plus")} New campaign</a>` : "", `Dashboard · ${snap.filters?.label || "All campaigns"}`) +
+      can("write") ? `<a class="btn" href="#/contacts/import">${icon("upload")} Import contacts</a><a class="btn primary" href="#/campaigns/new">${icon("plus")} New campaign</a>` : "") +
       banner +
       (noData ? card("", emptyState("sparkle", "Welcome. Let's make your first calls.", "Import your contacts, create a campaign, and the AI agent will call each contact, qualify them and book meetings.", can("write") ? `<div class="btn-group" style="margin-top:14px"><a class="btn primary" href="#/contacts/import">${icon("upload")} Import contacts</a><a class="btn" href="#/campaigns/new">Create a campaign</a></div>` : "")) : "") +
       `<div class="grid stats">
@@ -768,8 +769,8 @@
         ${card("Call outcomes", outcomeRows.length ? donut(outcomeRows, { label: "finished calls" }) : emptyState("analytics", "No outcomes yet", "Outcomes appear once calls are completed.", "", true), "", { sub: snap.outcomes?.length ? `${fmtNum(snap.outcomes.reduce((n, o) => n + o.count, 0))} finished calls` : "" })}
         ${card("Conversion", conv.length || perf.length ? `<div class="rates">${rateTile(metric(perf, "answer_rate"), "Answer rate", "")}${rateTile(metric(conv, "qualification_rate"), "Qualification rate", "good")}${rateTile(metric(conv, "meeting_rate"), "Meeting rate", "good")}${rateTile(metric(perf, "average_duration"), "Avg. call length", "")}</div>` : emptyState("analytics", "No results yet", "Rates appear after the first answered call.", "", true), `<a class="btn sm ghost" href="#/analytics">Analytics</a>`)}
       </div>
-      <div class="section-title">Recent activity</div>
-      ${card("", (snap.recent_calls || []).length ? `<div class="feed">${snap.recent_calls.slice(0, 12).map(activityOf).join("")}</div>` : emptyState("calls", "No calls yet", "Calls will appear here once a campaign is running.", "", true), (snap.recent_calls || []).length ? `<a class="btn sm ghost" href="#/calls">All calls</a>` : "", { flush: true })}
+      <div class="section-title"><span>Recent activity</span>${(snap.recent_calls || []).length ? `<a href="#/calls">All calls</a>` : ""}</div>
+      ${card("", (snap.recent_calls || []).length ? `<div class="feed">${snap.recent_calls.slice(0, 12).map(activityOf).join("")}</div>` : emptyState("calls", "No calls yet", "Calls will appear here once a campaign is running.", "", true), "", { flush: true })}
       ${snap.notes?.length ? `<p class="muted small" style="margin-top:12px">${snap.notes.map(esc).join(" · ")}</p>` : ""}`;
     $$("[data-action]", view).forEach((b) => (b.onclick = () => runAction(b, () => route(true))));
   }
@@ -831,7 +832,7 @@
     const rows = filter ? all.filter((c) => (filter === "ACTIVE" ? c.status === "ACTIVE" : c.status === filter)) : all;
     const alive = status?.scheduler?.workers?.alive ?? null;
     const counts = (s) => all.filter((c) => c.status === s).length;
-    view.innerHTML = head("Campaigns", `${plural(all.length, "campaign")} · ${counts("ACTIVE")} running · ${counts("PAUSED")} paused · ${counts("DRAFT")} draft`, can("write") ? `<a class="btn primary" href="#/campaigns/new">${icon("plus")} New campaign</a>` : "", { eyebrow: "Outbound" }) +
+    view.innerHTML = head("Campaigns", `${plural(all.length, "campaign")} · ${counts("ACTIVE")} running · ${counts("PAUSED")} paused · ${counts("DRAFT")} draft`, can("write") ? `<a class="btn primary" href="#/campaigns/new">${icon("plus")} New campaign</a>` : "") +
       (alive === 0 && state.engine?.state !== "running" && counts("ACTIVE") ? alert("warn", `<b>No dialler is active.</b> Running campaigns are not placing calls until the application's dialler or a separate scheduler is up. <div class="actions"><a class="btn sm" href="#/settings">Open settings</a></div>`) : "") +
       `<div class="tabs" role="tablist">${[["", "All"], ["ACTIVE", "Running"], ["PAUSED", "Paused"], ["DRAFT", "Draft"], ["COMPLETED", "Completed"], ["CANCELLED", "Cancelled"]].map(([v, l]) => `<button role="tab" aria-selected="${v === filter}" class="${v === filter ? "active" : ""}" data-filter="${v}">${l}${v ? `<span class="count">${counts(v)}</span>` : ""}</button>`).join("")}</div>` +
       (rows.length ? `<div class="grid cards">${rows.map((c) => campaignCard(c, byId[c.id])).join("")}</div>` :
@@ -845,6 +846,7 @@
   async function pageCampaign(view, [id], _token, quietRender = false) {
     const data = await api.get(`${API}/campaigns/${id}`);
     const c = data.campaign;
+    setCrumbs([["Campaigns", "#/campaigns"], c.name]);
     state.live = c.status === "ACTIVE";
     let cfg = c.configuration || {};
     let comp = cfg.compliance || {};
@@ -1006,7 +1008,7 @@
     const steps = ["Details", "Contacts", "AI agent", "Calling", "Review & launch"];
     const nav = (back, next, nextLabel = "Continue") => `<div class="form-actions">${back ? `<button class="btn ghost left" type="button" id="back">${icon("back")} Back</button>` : `<a class="btn ghost left" href="#/campaigns">Cancel</a>`}${next ? `<button class="btn primary" type="${next === "submit" ? "submit" : "button"}" id="next">${nextLabel} ${icon("arrow")}</button>` : ""}</div>`;
     const render = () => {
-      view.innerHTML = head("New campaign", "A campaign is created as a draft. Nothing is dialled until you start it.", "", { eyebrow: `Step ${step + 1} of ${steps.length}` }) +
+      view.innerHTML = head("New campaign", "A campaign is created as a draft. Nothing is dialled until you start it.", "") +
         `<div class="stepper" aria-label="Steps">${steps.map((s, i) => `<div class="step ${i === step ? "active" : i < step ? "done clickable" : ""}" data-step="${i}" ${i === step ? 'aria-current="step"' : ""}><span class="n">${i < step ? icon("check") : i + 1}</span><span class="t">${s}</span></div>`).join("")}</div><div id="step"></div>`;
       $$(".step.clickable", view).forEach((s) => (s.onclick = () => { step = Number(s.dataset.step); render(); }));
       const box = $("#step", view);
@@ -1089,7 +1091,7 @@
               } else ok(`Campaign "${created.name}" saved as a draft.`);
               location.hash = `#/campaigns/${id}`;
             } catch (err) {
-              if (id) { fail(err, start ? "finish setting up the campaign" : "finish setting up the campaign"); toast("The campaign was created as a draft; check its settings.", "warn"); location.hash = `#/campaigns/${id}`; }
+              if (id) { fail(err, "finish setting up the campaign"); toast("The campaign was created as a draft; check its settings.", "warn"); location.hash = `#/campaigns/${id}`; }
               else fail(err, "create the campaign");
             }
           }, start ? "Creating and starting…" : "Creating…");
@@ -1157,8 +1159,8 @@
         { label: "Added", sort: "created_at", render: (p) => `<span class="nowrap">${esc(p.created_at ? fmtDay(p.created_at) : "—")}</span>` },
         { label: "", actions: true, render: (p) => `<button class="btn sm ghost" type="button" data-open="${p.id}">View</button>${can("write") && p.status !== "DO_NOT_CALL" ? ` <button class="btn sm ghost danger" type="button" data-dnc="${p.id}" data-name="${esc(p.full_name)}" data-tip="Do not call">${icon("ban")}<span class="visually-hidden">Do not call</span></button>` : ""}` },
       ], list, { emptyHtml: emptyState("contacts", searched ? "No contacts match" : status ? `No ${statusLabel(status).toLowerCase()} contacts` : "No contacts yet", searched ? `Nothing matched "${esc(q)}". Try a name, a company or an email.` : status ? "Try another status." : "Import a CSV file to add contacts, or add one by hand.", !searched && !status && can("write") ? `<a class="btn primary" href="#/contacts/import">${icon("upload")} Import contacts</a>` : "") });
-      $$("th[data-sort]", box).forEach((th) => { if (th.dataset.sort === sortKey) th.classList.add("sorted", dir < 0 ? "desc" : ""); });
-      sortable(box, list, draw);
+      $$("th[data-sort]", box).forEach((th) => { if (th.dataset.sort === sortKey) { th.classList.add("sorted"); th.classList.toggle("desc", dir < 0); th.setAttribute("aria-sort", dir < 0 ? "descending" : "ascending"); } });
+      sortable(box, list, draw, sortKey, dir);
       $$("[data-open]", box).forEach((b) => (b.onclick = (e) => { e.preventDefault(); openContact(b.dataset.open); }));
       $$("[data-dnc]", box).forEach((b) => (b.onclick = () => markDnc(b.dataset.dnc, b.dataset.name, () => route(true))));
     };
@@ -1205,7 +1207,7 @@
         ${custom.length ? `<details class="panel" style="margin-top:14px"><summary>Custom fields (${custom.length})</summary><div class="card-body">${kv(custom.map(([k, v]) => [k, esc(String(v))]))}</div></details>` : ""}
         <div class="section-title">Calls</div>
         ${(r.calls || []).length ? table([
-          { label: "When", render: (a) => `<a href="#/calls/${a.id}">${esc(fmtDate(a.started_at || a.placement_started_at || a.created_at))}</a>` },
+          { label: "When", render: (a) => `<a class="nowrap" href="#/calls/${a.id}">${esc(fmtDate(a.started_at || a.placement_started_at || a.created_at))}</a>` },
           { label: "Status", render: (a) => badge(a.status) },
           { label: "Attempt", num: true, key: "attempt_number" },
           { label: "Duration", render: (a) => esc(fmtDur(a.duration_seconds)) },
@@ -1282,7 +1284,7 @@
     const stepper = (at) => `<div class="stepper" aria-label="Import steps">${steps.map((s, i) => `<div class="step ${i === at ? "active" : i < at ? "done" : ""}" ${i === at ? 'aria-current="step"' : ""}><span class="n">${i < at ? icon("check") : i + 1}</span><span class="t">${s}</span></div>`).join("")}</div>`;
     const render = () => {
       const at = outcome ? 3 : chosen ? 2 : 0;
-      view.innerHTML = head("Import contacts", "Upload a CSV file, check the validation results, then confirm. Nothing is dialled by importing.", "", { eyebrow: "Contacts" }) + stepper(at) + `<div id="body"></div>`;
+      view.innerHTML = head("Import contacts", "Upload a CSV file, check the validation results, then confirm. Nothing is dialled by importing.", "") + stepper(at) + `<div id="body"></div>`;
       const body = $("#body", view);
       if (outcome) {
         const r = outcome;
@@ -1354,7 +1356,7 @@
   function callsTable(rows, { campaign = true } = {}) {
     return table([
       { label: "Contact", primary: true, render: (r) => `<a href="#/calls/${r.attempt_id}">${esc(r.prospect)}</a>${r.company ? `<div class="muted">${esc(r.company)}</div>` : ""}` },
-      ...(campaign ? [{ label: "Campaign", render: (r) => (r.campaign_id ? `<a href="#/campaigns/${r.campaign_id}" class="muted">${esc(r.campaign)}</a>` : `<span class="muted">${esc(r.campaign || "—")}</span>`) }] : []),
+      ...(campaign ? [{ label: "Campaign", render: (r) => (r.campaign_id ? `<a href="#/campaigns/${r.campaign_id}" class="muted clip" title="${esc(r.campaign)}">${esc(r.campaign)}</a>` : `<span class="muted clip" title="${esc(r.campaign || "")}">${esc(r.campaign || "—")}</span>`) }] : []),
       { label: "Status", render: (r) => (["CALLING", "CONNECTED", "QUEUED"].includes(r.status) && !r.has_result ? liveBadge(r.disposition || r.status) : badge(r.disposition || r.status)) },
       { label: "Duration", render: (r) => `<span class="nowrap">${esc(r.duration || "—")}</span>` },
       { label: "Qualification", render: qualBadge },
@@ -1379,7 +1381,7 @@
     if (q.meeting) rows = rows.filter((r) => (q.meeting === "ANY" ? r.meeting_status && !["NONE", "UNKNOWN"].includes(r.meeting_status) : r.meeting_status === q.meeting));
     const narrowed = q.qualification || q.meeting;
     const hasFilter = Object.values(q).some(Boolean);
-    view.innerHTML = head("Calls", `${fmtNum(rows.length)} shown${narrowed ? " on this page" : ""}${data.filters?.label ? ` · ${esc(data.filters.label)}` : ""}`, "", { eyebrow: "Call history" }) +
+    view.innerHTML = head("Calls", `${fmtNum(rows.length)} shown${narrowed ? " on this page" : ""}${data.filters?.label ? ` · ${esc(data.filters.label)}` : ""}`, "") +
       `<form class="filters" id="f"><div class="field wide"><span class="lbl">Search</span><div class="search">${icon("search")}<input name="q" value="${esc(q.q || "")}" placeholder="Name, company, email…" aria-label="Search calls"></div></div>
         ${field("Campaign", select("campaign", [["", "All campaigns"], ...(campaigns.campaigns || []).map((c) => [c.id, c.name])], q.campaign))}
         ${field("Status", select("status", CALL_STATUSES, q.status))}
@@ -1404,13 +1406,14 @@
     const transcript = r.transcript || (d.conversation && d.conversation.transcript) || [];
     const who = d.prospect ? d.prospect.full_name || [d.prospect.first_name, d.prospect.last_name].filter(Boolean).join(" ") : ""; // the detail JSON carries first/last, not full_name
     const disposition = r.disposition || c.status;
+    setCrumbs([["Calls", "#/calls"], who || "Call details"]);
     const items = (list, empty) => (list && list.length ? `<ul class="list-clean">${list.map((i) => { const text = typeof i === "string" ? i : i.detail || i.text || ""; const kind = typeof i === "object" && i.kind ? i.kind : ""; return `<li>${kind ? `<span class="badge plain">${esc(human(kind))}</span>` : ""}<span>${esc(text || human(kind))}${typeof i === "object" && i.handled === false ? ` <span class="muted small">· not addressed</span>` : ""}</span></li>`; }).join("")}</ul>` : `<p class="muted">${esc(empty)}</p>`);
     const known = (v) => v && !["UNKNOWN", "NONE"].includes(String(v).toUpperCase());
     const nextAction = known(r.next_action) ? statusLabel(r.next_action) : "";
     const meetings = d.meetings || [], callbacks = d.callbacks || [], transfers = d.transfers || [];
     const hasMeeting = known(r.meeting_status) || meetings.length;
     const hasCallback = known(r.callback_status) || callbacks.length;
-    view.innerHTML = head(`${esc(who || "Unknown contact")} ${badge(disposition, tone(cl.tone), "lg")}`, `${esc(cl.at || fmtDate(c.started_at))}${cl.duration ? ` · ${esc(cl.duration)}` : ""}${d.campaign ? ` · <a href="#/campaigns/${d.campaign.id}">${esc(d.campaign.name)}</a>` : ""}`, `<a class="btn ghost" href="#/calls">${icon("back")} All calls</a>`, { eyebrow: "Call review" }) +
+    view.innerHTML = head(`${esc(who || "Unknown contact")} ${badge(disposition, tone(cl.tone), "lg")}`, `${esc(cl.at || fmtDate(c.started_at))}${cl.duration ? ` · ${esc(cl.duration)}` : ""}${d.campaign ? ` · <a href="#/campaigns/${d.campaign.id}">${esc(d.campaign.name)}</a>` : ""}`, `<a class="btn ghost" href="#/calls">${icon("back")} All calls</a>`) +
       card("", facts([
         ["Contact", `<b>${esc(who || "—")}</b>${d.prospect?.job_title ? `<div class="muted">${esc(d.prospect.job_title)}</div>` : ""}`],
         ["Company", esc(d.prospect?.company || "")],
@@ -1456,7 +1459,7 @@
     const pr = state.config?.providers || {};
     const t = state.config?.telephony || {};
     const src = `${bot}/client`;
-    view.innerHTML = head(`<span class="ai-ring" aria-hidden="true">${icon("sparkle")}</span> Live AI Agent`, "Talk to the agent from your browser, exactly as a contact hears it on the phone.", `<a class="btn ghost" href="${esc(src)}" target="_blank" rel="noopener">${icon("external")} Open in a new tab</a>`, { eyebrow: "AI agent" }) +
+    view.innerHTML = head(`<span class="ai-ring" aria-hidden="true">${icon("sparkle")}</span> Live AI Agent`, "Talk to the agent from your browser, exactly as a contact hears it on the phone.", `<a class="btn ghost" href="${esc(src)}" target="_blank" rel="noopener">${icon("external")} Open in a new tab</a>`) +
       `<div class="grid main-side">
         <div class="stack">
           ${card("Voice client", `<iframe class="frame" id="frame" src="${esc(src)}/?theme=${currentTheme()}" allow="microphone; autoplay" title="Live AI agent voice client"></iframe>`, `<span class="pill-live"><span class="dot accent"></span> Embedded from the agent</span><button class="btn sm ghost" type="button" id="reload">${icon("refresh")} Reload</button>`, { flush: true }).replace('class="card"', 'class="card glow"')}
@@ -1485,7 +1488,7 @@
     const docs = data.documents || [];
     const types = (data.supported || []).map((s) => s.replace(/^\./, "").toUpperCase()).join(", ");
     const uploadZone = can("write") ? `<label class="dropzone" id="drop" for="up"><span class="drop-icon" aria-hidden="true">${icon("upload")}</span><b>Drop a document here, or choose one</b><span class="muted small">${types ? `${types} files.` : ""} The text is split into passages and indexed so the agent can answer from it.</span><span class="btn primary" style="margin-top:12px">${icon("plus")} Add document</span><input type="file" id="up" accept="${esc(data.supported.join(","))}" aria-label="Document"></label>` : "";
-    view.innerHTML = head("Knowledge Base", `${plural(data.counts.documents, "document")} · ${plural(data.counts.chunks, "passage")} the agent can answer from`, "", { eyebrow: "AI agent" }) +
+    view.innerHTML = head("Knowledge Base", `${plural(data.counts.documents, "document")} · ${plural(data.counts.chunks, "passage")} the agent can answer from`, "") +
       `<div class="grid main-side">
         <div class="stack">
           ${card("Documents", docs.length ? table([
@@ -1536,7 +1539,7 @@
     const m = (list, key) => metric(list, key);
     const val = (x) => (x && x.available !== false ? x.value : null);
     const hasFilter = !!(q.campaign || q.from || q.to);
-    view.innerHTML = head("Analytics", esc(snap.filters?.label || "All campaigns · all time"), "", { eyebrow: "Insights" }) +
+    view.innerHTML = head("Analytics", esc(snap.filters?.label || "All campaigns · all time"), "") +
       `<form class="filters" id="f">${field("Campaign", select("campaign", [["", "All campaigns"], ...(campaigns.campaigns || []).map((c) => [c.id, c.name])], q.campaign))}${field("From", inp("from", q.from || "", 'type="date"'))}${field("To", inp("to", q.to || "", 'type="date"'))}<button class="btn" type="submit">Apply</button>${hasFilter ? `<a class="btn ghost" href="#/analytics">Clear</a>` : ""}</form>` +
       (!calls ? card("", emptyState("analytics", "No analytics yet", hasFilter ? "No calls match these filters." : "Analytics will appear after your first campaign places calls.")) :
       `<div class="grid stats">
@@ -1568,12 +1571,12 @@
       </div>
       <div class="section-title">Campaign performance</div>
       ${card("", table([
-        { label: "Campaign", primary: true, render: (c) => `<a href="#/campaigns/${c.id}">${esc(c.name)}</a>` }, { label: "Status", render: (c) => badge(c.status === "ACTIVE" ? "RUNNING" : c.status) },
+        { label: "Campaign", primary: true, render: (c) => `<a class="clip" href="#/campaigns/${c.id}" title="${esc(c.name)}">${esc(c.name)}</a>` }, { label: "Status", render: (c) => badge(c.status === "ACTIVE" ? "RUNNING" : c.status) },
         { label: "Contacts", num: true, key: "prospects" }, { label: "Calls", num: true, key: "attempts" }, { label: "Answered", num: true, key: "answered" },
         { label: "Answer rate", num: true, render: (c) => (c.answer_rate != null ? `${esc(c.answer_rate)}%` : "—") },
         { label: "Qualified", num: true, key: "qualified" }, { label: "Meetings", num: true, key: "meetings" }, { label: "Voicemail", num: true, key: "voicemail" }, { label: "Failed", num: true, key: "failed" },
         { label: "Progress", render: (c) => `${progressBar([[c.progress_pct || 0, ""]], { title: `${c.progress_pct || 0}%` })}<div class="muted">${esc(c.progress_pct ?? 0)}%</div>` },
-      ], snap.campaigns, { emptyHtml: emptyState("campaigns", "No campaigns in this view", "", "", true) }), "", { flush: true })}
+      ], snap.campaigns, { emptyHtml: emptyState("campaigns", "No campaigns in this view", "", "", true), cls: "compact" }), "", { flush: true })}
       ${(snap.compliance || []).length || (snap.progress || []).length ? `<details class="panel" style="margin-top:14px"><summary>More metrics</summary><div class="card-body"><div class="grid stats compact">${[...(snap.compliance || []), ...(snap.progress || [])].map((x) => stat(x.label, x.available === false ? "n/a" : x.value, x.detail, x.tone, "compact")).join("")}</div></div></details>` : ""}`);
     $("#f", view).onsubmit = (e) => { e.preventDefault(); const f = Object.fromEntries(Object.entries(formData(e.target)).filter(([, v]) => v)); location.hash = `#/analytics${Object.keys(f).length ? `?${new URLSearchParams(f)}` : ""}`; };
   }
@@ -1588,11 +1591,11 @@
     const workers = status?.scheduler?.workers;
     const queue = status?.scheduler?.queue;
     const yn = (v) => (typeof v === "boolean" ? badge(v ? "yes" : "no") : v == null || v === "" ? '<span class="muted">—</span>' : esc(String(v)));
-    const listOrDash = (v) => (Array.isArray(v) ? (v.length ? v.map(esc).join(", ") : '<span class="muted">—</span>') : yn(v));
+    const listOrDash = (v) => (Array.isArray(v) ? (v.length ? (v.some((x) => String(x).length > 40) ? `<ul class="list-plain">${v.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : v.map(esc).join(", ")) : '<span class="muted">—</span>') : yn(v));
     const auto = (obj) => (obj && typeof obj === "object" ? kv(Object.entries(obj).map(([k, v]) => [human(k), listOrDash(v)])) : `<p>${yn(obj)}</p>`);
     const engine = state.engine;
     const [et, eword, ewhy] = engine ? ENGINE[engine.state] || ["neutral", human(engine.state), () => ""] : ["neutral", "Unknown", () => ""];
-    view.innerHTML = head("Settings", "How this deployment is configured. Values are read from the environment when the application starts; secrets are never shown here.", "", { eyebrow: "System" }) +
+    view.innerHTML = head("Settings", "How this deployment is configured. Values are read from the environment when the application starts; secrets are never shown here.", "") +
       `<div class="section-title">Profile</div>
       ${card("Your account", facts([["Name", `<b>${esc(p.name)}</b>`], ["Role", badge(p.role, "info")], ["Signed in via", esc(p.via)], ["Permissions", `<div class="chips">${p.permissions.map((x) => `<span class="chip">${esc(human(x))}</span>`).join("")}</div>`]]), `<button class="btn sm" type="button" id="signout">${icon("logout")} Sign out</button>`)}
       <div class="section-title">Calling</div>

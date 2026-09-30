@@ -98,6 +98,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from .prompts import is_injected_block
 from .reliability.observability import current_trace_id, event
 from .reliability.supervisor import stage_of
+from .spoken_text import TOOL_REPLY_METADATA
 
 # Turn kinds. Only a `response` turn has an end-of-user-speech anchor and
 # therefore a total; the other two are the bot speaking on its own.
@@ -780,7 +781,11 @@ class _TrackerObserver(BaseObserver):
         elif isinstance(frame, TranscriptionFrame):
             tracker.on_final_transcript()
         elif isinstance(frame, LLMFullResponseStartFrame):
-            tracker.on_llm_started()
+            # Phase 43: a reply carried in a tool call is pushed as a response
+            # of its own but is not a request; its text still counts as the
+            # first token of the request that made the call.
+            if not frame.metadata.get(TOOL_REPLY_METADATA):
+                tracker.on_llm_started()
         elif isinstance(frame, LLMTextFrame):
             tracker.on_llm_text()
         elif isinstance(frame, LLMFullResponseEndFrame):

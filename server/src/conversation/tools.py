@@ -95,7 +95,17 @@ _RECORDING = ("record_discovery", "record_objection", "set_interest", "mark_do_n
 #: write the qualification record and the state machine, in memory, and
 #: answer "recorded" — so when the model has already spoken its reply in
 #: the same response as the call, that reply is the turn and the second
-#: request is skipped (`toolkit.strict_tool`'s ``release``). Each still runs
+#: request is skipped (`toolkit.strict_tool`'s ``release``). Phase 43: four
+#: of them take a ``say`` argument — the reply itself, travelling in the
+#: call — because on Cerebras qwen-3.8 the model never spoke in the same
+#: response as a call (0 of 7 tool turns in the 2026-09-23 audit) and every
+#: recording turn paid the second request; a ``say`` that reaches the wrapper
+#: with no other speech is spoken by the wrapper and the turn is released
+#: (`toolkit._speak_tool_reply`). `record_objection` deliberately has no
+#: ``say``: its result carries the objection guidance (acknowledge, answer
+#: honestly, one question, no pitch) and the price-objection eval judged
+#: replies written without it weaker (1 of 4 passed against 2 of 2), so an
+#: objection keeps the guided second request. Each still runs
 #: the second request when its result *does* need acting on: a no that must
 #: be closed (`stopped_selling`), a refused move. The other seven keep the
 #: request unconditionally: the model must not claim an availability, a
@@ -226,6 +236,7 @@ def build_tools(conversation: SalesConversation) -> list[Any]:
         desired_outcome: str = "",
         timeline: str = "",
         decision_role: str = "",
+        say: str = "",
     ) -> ToolResult:
         """Record what they just told you about their situation. Fill only what they said.
 
@@ -237,6 +248,7 @@ def build_tools(conversation: SalesConversation) -> list[Any]:
             desired_outcome: What they want instead.
             timeline: IMMEDIATE, THIS_QUARTER, THIS_YEAR, LATER or NONE.
             decision_role: DECISION_MAKER, INFLUENCER or NOT_INVOLVED.
+            say: What you say to them next, in your own words, one or two sentences: answer anything they just asked first, react to what they said, then carry the conversation on. Always fill it; never mention recording.
         """
         changed = conversation.record_discovery(
             pain_point=pain_point,
@@ -249,12 +261,13 @@ def build_tools(conversation: SalesConversation) -> list[Any]:
         )
         return ToolResult.ok({"recorded": changed}, guidance=TOOL_GUIDANCE["recorded"])
 
-    async def set_interest(params: FunctionCallParams, level: str, reason: str = "") -> ToolResult:
+    async def set_interest(params: FunctionCallParams, level: str, reason: str = "", say: str = "") -> ToolResult:
         """Record how interested they sound. NOT_INTERESTED only for a clear no.
 
         Args:
             level: INTERESTED, CURIOUS, NEUTRAL, RELUCTANT or NOT_INTERESTED.
             reason: What they said that showed it, briefly.
+            say: What you say to them next, in your own words: your actual reply, one or two sentences. Always fill it; never mention recording.
         """
         parsed, moved = conversation.set_interest(level, reason)
         if parsed is InterestLevel.UNKNOWN:
@@ -291,11 +304,12 @@ def build_tools(conversation: SalesConversation) -> list[Any]:
             {"objection": parsed.value, "stopped_selling": stopped}, guidance=TOOL_GUIDANCE[key]
         )
 
-    async def move_to_stage(params: FunctionCallParams, stage: str) -> ToolResult:
+    async def move_to_stage(params: FunctionCallParams, stage: str, say: str = "") -> ToolResult:
         """Say which part of the call you are moving into.
 
         Args:
             stage: discovery, qualification, value or meeting.
+            say: What you say to them next, in your own words: your actual reply, one or two sentences. Always fill it; never mention recording.
         """
         moved, message = conversation.move_to(stage)
         data = {"stage": conversation.state.value, "moved": moved}
@@ -312,12 +326,13 @@ def build_tools(conversation: SalesConversation) -> list[Any]:
             NOT_AUTHORIZED, message, guidance=TOOL_GUIDANCE["refused_move"], data=data
         )
 
-    async def request_meeting(params: FunctionCallParams, when: str = "", note: str = "") -> ToolResult:
+    async def request_meeting(params: FunctionCallParams, when: str = "", note: str = "", say: str = "") -> ToolResult:
         """Record that they agreed to a next step. Books nothing; a colleague confirms the time.
 
         Args:
             when: The time they suggested, in their words.
             note: Anything they asked to be covered.
+            say: What you say to them next, in your own words: your actual reply, one or two sentences. Always fill it; never mention recording.
         """
         moved = conversation.request_meeting(when, note)
         if not moved and conversation.state.is_rejection:
